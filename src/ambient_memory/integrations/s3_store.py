@@ -7,7 +7,7 @@ from typing import Any, Mapping
 def build_chunk_key(source_id: str, started_at: datetime, *, extension: str = "wav") -> str:
     normalized_started_at = _normalize_timestamp(started_at)
     normalized_extension = extension.lstrip(".") or "wav"
-    object_name = normalized_started_at.strftime("%Y%m%dT%H%M%SZ")
+    object_name = normalized_started_at.strftime("%Y%m%dT%H%M%S.%fZ")
 
     return (
         f"raw-audio/{source_id}/{normalized_started_at:%Y/%m/%d}/"

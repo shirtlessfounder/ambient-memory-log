@@ -73,7 +73,24 @@ def test_chunk_key_includes_source_and_timestamp() -> None:
 
     key = s3_store.build_chunk_key("desk-a", datetime(2026, 4, 2, 9, 0, 0, tzinfo=UTC))
 
-    assert key == "raw-audio/desk-a/2026/04/02/20260402T090000Z.wav"
+    assert key == "raw-audio/desk-a/2026/04/02/20260402T090000.000000Z.wav"
+
+
+def test_chunk_key_avoids_same_second_collisions_for_same_source() -> None:
+    s3_store = load_s3_store()
+
+    first_key = s3_store.build_chunk_key(
+        "desk-a",
+        datetime(2026, 4, 2, 9, 0, 0, 123456, tzinfo=UTC),
+    )
+    second_key = s3_store.build_chunk_key(
+        "desk-a",
+        datetime(2026, 4, 2, 9, 0, 0, 654321, tzinfo=UTC),
+    )
+
+    assert first_key.startswith("raw-audio/desk-a/2026/04/02/")
+    assert second_key.startswith("raw-audio/desk-a/2026/04/02/")
+    assert first_key != second_key
 
 
 def test_upload_chunk_uses_deterministic_key() -> None:
@@ -89,7 +106,7 @@ def test_upload_chunk_uses_deterministic_key() -> None:
         body=b"audio-bytes",
     )
 
-    assert key == "raw-audio/desk-a/2026/04/02/20260402T090000Z.wav"
+    assert key == "raw-audio/desk-a/2026/04/02/20260402T090000.000000Z.wav"
     assert client.put_calls == [
         {
             "Bucket": "ambient-memory",
@@ -108,7 +125,7 @@ def test_presign_chunk_url_uses_get_object() -> None:
     url = s3_store.presign_chunk_url(
         client=client,
         bucket="ambient-memory",
-        key="raw-audio/desk-a/2026/04/02/20260402T090000Z.wav",
+        key="raw-audio/desk-a/2026/04/02/20260402T090000.000000Z.wav",
         expires_in=900,
     )
 
@@ -118,7 +135,7 @@ def test_presign_chunk_url_uses_get_object() -> None:
             "client_method": "get_object",
             "params": {
                 "Bucket": "ambient-memory",
-                "Key": "raw-audio/desk-a/2026/04/02/20260402T090000Z.wav",
+                "Key": "raw-audio/desk-a/2026/04/02/20260402T090000.000000Z.wav",
             },
             "expires_in": 900,
         }
@@ -134,7 +151,7 @@ def test_register_uploaded_chunk_creates_uploaded_row(session: Session) -> None:
         session,
         source_id="desk-a",
         s3_bucket="ambient-memory",
-        s3_key="raw-audio/desk-a/2026/04/02/20260402T090000Z.wav",
+        s3_key="raw-audio/desk-a/2026/04/02/20260402T090000.000000Z.wav",
         started_at=started_at,
         ended_at=ended_at,
         checksum="sha256:abc123",
@@ -153,7 +170,7 @@ def test_register_uploaded_chunk_updates_existing_row(session: Session) -> None:
     register_uploaded_chunk = load_register_uploaded_chunk()
     started_at = datetime(2026, 4, 2, 9, 0, 0, tzinfo=UTC)
     ended_at = started_at + timedelta(seconds=30)
-    key = "raw-audio/desk-a/2026/04/02/20260402T090000Z.wav"
+    key = "raw-audio/desk-a/2026/04/02/20260402T090000.000000Z.wav"
 
     existing = AudioChunk(
         source_id="desk-a",
