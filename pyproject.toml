@@ -6,10 +6,12 @@ requires-python = ">=3.12"
 dependencies = [
   "alembic>=1.15.2",
   "boto3>=1.40.48",
+  "fastapi>=0.116.1",
   "pydantic-settings>=2.8.1",
   "psycopg[binary]>=3.2.6",
   "sqlalchemy>=2.0.40",
   "typer>=0.16.0",
+  "uvicorn>=0.35.0",
 ]
 
 [project.scripts]
@@ -17,6 +19,7 @@ ambient-memory = "ambient_memory.cli:main"
 
 [dependency-groups]
 dev = [
+  "httpx>=0.28.1",
   "pytest>=8.3.5",
 ]
 

@@ -3,6 +3,7 @@ from pathlib import Path
 from typer import Option, Typer
 from typer.testing import CliRunner
 
+from ambient_memory.api.app import run_api_server
 from ambient_memory.capture.agent import list_local_audio_devices, run_capture_agent
 from ambient_memory.config import EnrollmentSettings
 from ambient_memory.db import create_voiceprint, session_scope
@@ -75,6 +76,15 @@ def worker_run(
 ) -> None:
     """Poll and process uploaded audio chunks continuously."""
     run_worker_loop(poll_seconds=poll_seconds)
+
+
+@api_app.command("run")
+def api_run(
+    host: str | None = Option(None, "--host", help="Host interface to bind the API server to."),
+    port: int | None = Option(None, "--port", min=1, max=65535, help="Port to bind the API server to."),
+) -> None:
+    """Run the read API."""
+    run_api_server(host=host, port=port)
 
 
 @enroll_app.command("voiceprint")

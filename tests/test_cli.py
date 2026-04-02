@@ -99,6 +99,23 @@ def test_cli_worker_run_wires_poll_seconds(monkeypatch) -> None:
     assert calls == {"poll_seconds": 2.5}
 
 
+def test_cli_api_run_wires_host_and_port(monkeypatch) -> None:
+    from ambient_memory import cli
+
+    calls: dict[str, object] = {}
+
+    def fake_run_api_server(*, host: str | None = None, port: int | None = None) -> None:
+        calls["host"] = host
+        calls["port"] = port
+
+    monkeypatch.setattr(cli, "run_api_server", fake_run_api_server)
+
+    result = runner.invoke(app, ["api", "run", "--host", "0.0.0.0", "--port", "9001"])
+
+    assert result.exit_code == 0
+    assert calls == {"host": "0.0.0.0", "port": 9001}
+
+
 def test_cli_enroll_voiceprint_help_lists_required_options() -> None:
     result = runner.invoke(app, ["enroll", "voiceprint", "--help"])
 

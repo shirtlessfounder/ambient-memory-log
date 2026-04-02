@@ -28,6 +28,17 @@ class WorkerSettings(BaseSettings):
     model_config = COMMON_MODEL_CONFIG
 
 
+class ApiSettings(BaseSettings):
+    database_url: str = Field(alias="DATABASE_URL")
+    database_ssl_root_cert: str | None = Field(default=None, alias="DATABASE_SSL_ROOT_CERT")
+    aws_region: str | None = Field(default=None, alias="AWS_REGION")
+    api_host: str = Field(default="127.0.0.1", alias="API_HOST")
+    api_port: int = Field(default=8000, alias="API_PORT")
+    api_presign_expires_in: int = Field(default=3600, alias="API_PRESIGN_EXPIRES_IN")
+
+    model_config = COMMON_MODEL_CONFIG
+
+
 class Settings(EnrollmentSettings):
     aws_region: str = Field(alias="AWS_REGION")
     s3_bucket: str = Field(alias="S3_BUCKET")
