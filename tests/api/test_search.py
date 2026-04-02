@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi.testclient import TestClient
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from ambient_memory.api.app import create_app
+from ambient_memory.api.search import SearchService
 from ambient_memory.models import AudioChunk, CanonicalUtterance, Source, TranscriptCandidate, UtteranceSource
 
 
@@ -201,6 +204,34 @@ def test_get_utterance_returns_detail_with_replay_audio_links(
             "expires_in": 900,
         },
     ]
+
+
+def test_postgres_search_uses_search_vector_column_when_querying() -> None:
+    service = SearchService(
+        session_factory=sessionmaker(),
+        s3_client=FakeS3Client(),
+    )
+    postgres_session = SimpleNamespace(
+        bind=SimpleNamespace(
+            dialect=SimpleNamespace(name="postgresql"),
+        )
+    )
+
+    stmt = service._apply_filters(
+        postgres_session,
+        stmt=select(CanonicalUtterance),
+        query_text="roadmap plan",
+        speaker=None,
+        from_at=None,
+        to_at=None,
+    )
+    compiled_stmt = stmt.compile(dialect=postgresql.dialect())
+    compiled = str(compiled_stmt).lower()
+
+    assert "canonical_utterances.search_vector" in compiled
+    assert "coalesce(canonical_utterances.search_vector, to_tsvector" in compiled
+    assert "websearch_to_tsquery" in compiled
+    assert "roadmap plan" in compiled_stmt.params.values()
 
 
 def _seed_search_rows(session_factory: sessionmaker[Session]) -> None:

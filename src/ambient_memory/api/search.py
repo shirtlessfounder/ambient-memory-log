@@ -199,7 +199,10 @@ class SearchService:
         if normalized_query:
             dialect_name = session.bind.dialect.name if session.bind is not None else ""
             if dialect_name == "postgresql":
-                search_vector = func.to_tsvector("english", CanonicalUtterance.text)
+                search_vector = func.coalesce(
+                    CanonicalUtterance.search_vector,
+                    func.to_tsvector("english", CanonicalUtterance.text),
+                )
                 ts_query = func.websearch_to_tsquery("english", normalized_query)
                 stmt = stmt.where(search_vector.op("@@")(ts_query))
             else:

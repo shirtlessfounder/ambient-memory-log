@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from typer import Option, Typer
+from typer import Context, Option, Typer
 from typer.testing import CliRunner
 
 from ambient_memory.api.app import run_api_server
@@ -21,7 +21,7 @@ class HelpTyper(Typer):
 app = HelpTyper(help="Ambient memory log CLI.")
 agent_app = Typer(help="Capture agent commands.")
 worker_app = Typer(help="Pipeline worker commands.")
-api_app = Typer(help="Read API commands.")
+api_app = Typer(help="Read API commands.", invoke_without_command=True)
 enroll_app = Typer(help="Enrollment commands.")
 
 app.add_typer(agent_app, name="agent")
@@ -78,13 +78,31 @@ def worker_run(
     run_worker_loop(poll_seconds=poll_seconds)
 
 
+def _start_api_server(
+    host: str | None = Option(None, "--host", help="Host interface to bind the API server to."),
+    port: int | None = Option(None, "--port", min=1, max=65535, help="Port to bind the API server to."),
+) -> None:
+    run_api_server(host=host, port=port)
+
+
+@api_app.callback()
+def api_callback(
+    ctx: Context,
+    host: str | None = Option(None, "--host", help="Host interface to bind the API server to."),
+    port: int | None = Option(None, "--port", min=1, max=65535, help="Port to bind the API server to."),
+) -> None:
+    """Run the read API."""
+    if ctx.invoked_subcommand is None:
+        _start_api_server(host=host, port=port)
+
+
 @api_app.command("run")
 def api_run(
     host: str | None = Option(None, "--host", help="Host interface to bind the API server to."),
     port: int | None = Option(None, "--port", min=1, max=65535, help="Port to bind the API server to."),
 ) -> None:
     """Run the read API."""
-    run_api_server(host=host, port=port)
+    _start_api_server(host=host, port=port)
 
 
 @enroll_app.command("voiceprint")
