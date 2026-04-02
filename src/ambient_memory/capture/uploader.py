@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from hashlib import sha256
 from pathlib import Path
 import re
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.orm import Session
 
@@ -14,7 +15,9 @@ from ambient_memory.db import record_agent_heartbeat, register_uploaded_chunk
 from ambient_memory.integrations.s3_store import upload_chunk
 
 
-CHUNK_FILENAME_PATTERN = re.compile(r"(\d{8}T\d{6})")
+CHUNK_FILENAME_PATTERN = re.compile(
+    r"^chunk-(?:(?P<uniqueness_token>.+)-)?(?P<timestamp>\d{8}T\d{6})\.(?P<extension>[^.]+)$"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +39,7 @@ class ChunkUploader:
         source_type: str,
         device_owner: str | None = None,
         segment_seconds: int = 30,
+        local_timezone: tzinfo | None = None,
     ) -> None:
         self.spool = spool
         self.s3_client = s3_client
@@ -45,7 +49,7 @@ class ChunkUploader:
         self.source_type = source_type
         self.device_owner = device_owner
         self.segment_seconds = segment_seconds
-        self.local_tz = datetime.now().astimezone().tzinfo or UTC
+        self.local_timezone = local_timezone or _load_local_timezone()
 
     def upload_ready(self) -> UploadBatchResult:
         attempted = 0
@@ -63,7 +67,7 @@ class ChunkUploader:
 
     def _upload_entry(self, entry: SpoolEntry) -> bool:
         now = datetime.now(UTC)
-        started_at = self._started_at_for(entry.path)
+        started_at, uniqueness_token = self._parse_chunk_file(entry.path)
         ended_at = started_at + timedelta(seconds=self.segment_seconds)
         checksum = self._checksum_for(entry.path)
 
@@ -78,6 +82,7 @@ class ChunkUploader:
                     extension=entry.path.suffix.lstrip(".") or "wav",
                     content_type=self._content_type_for(entry.path),
                     metadata=self._metadata(),
+                    uniqueness_token=uniqueness_token,
                 )
 
             session = self.session_factory()
@@ -123,13 +128,14 @@ class ChunkUploader:
             metadata["device_owner"] = self.device_owner
         return metadata
 
-    def _started_at_for(self, path: Path) -> datetime:
-        match = CHUNK_FILENAME_PATTERN.search(path.name)
+    def _parse_chunk_file(self, path: Path) -> tuple[datetime, str | None]:
+        match = CHUNK_FILENAME_PATTERN.match(path.name)
         if match is None:
             raise ValueError(f"chunk filename does not include timestamp: {path.name}")
 
-        naive_started_at = datetime.strptime(match.group(1), "%Y%m%dT%H%M%S")
-        return naive_started_at.replace(tzinfo=UTC)
+        naive_started_at = datetime.strptime(match.group("timestamp"), "%Y%m%dT%H%M%S")
+        local_started_at = naive_started_at.replace(tzinfo=self.local_timezone)
+        return local_started_at.astimezone(UTC), match.group("uniqueness_token")
 
     def _checksum_for(self, path: Path) -> str:
         digest = sha256()
@@ -142,3 +148,23 @@ class ChunkUploader:
         if path.suffix.lower() == ".wav":
             return "audio/wav"
         return "application/octet-stream"
+
+
+def _load_local_timezone() -> tzinfo:
+    localtime_path = Path("/etc/localtime")
+    try:
+        resolved = localtime_path.resolve()
+    except OSError:
+        resolved = None
+
+    if resolved is not None:
+        marker = "/zoneinfo/"
+        resolved_text = str(resolved)
+        if marker in resolved_text:
+            zone_name = resolved_text.split(marker, 1)[1]
+            try:
+                return ZoneInfo(zone_name)
+            except ZoneInfoNotFoundError:
+                pass
+
+    return datetime.now().astimezone().tzinfo or UTC

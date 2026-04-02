@@ -1,13 +1,25 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import re
 from typing import Any, Mapping
 
 
-def build_chunk_key(source_id: str, started_at: datetime, *, extension: str = "wav") -> str:
+SAFE_TOKEN_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def build_chunk_key(
+    source_id: str,
+    started_at: datetime,
+    *,
+    extension: str = "wav",
+    uniqueness_token: str | None = None,
+) -> str:
     normalized_started_at = _normalize_timestamp(started_at)
     normalized_extension = extension.lstrip(".") or "wav"
     object_name = normalized_started_at.strftime("%Y%m%dT%H%M%S.%fZ")
+    if uniqueness_token:
+        object_name = f"{object_name}-{_normalize_uniqueness_token(uniqueness_token)}"
 
     return (
         f"raw-audio/{source_id}/{normalized_started_at:%Y/%m/%d}/"
@@ -25,8 +37,14 @@ def upload_chunk(
     extension: str = "wav",
     content_type: str = "audio/wav",
     metadata: Mapping[str, str] | None = None,
+    uniqueness_token: str | None = None,
 ) -> str:
-    key = build_chunk_key(source_id, started_at, extension=extension)
+    key = build_chunk_key(
+        source_id,
+        started_at,
+        extension=extension,
+        uniqueness_token=uniqueness_token,
+    )
     client.put_object(
         Bucket=bucket,
         Key=key,
@@ -49,3 +67,10 @@ def _normalize_timestamp(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _normalize_uniqueness_token(value: str) -> str:
+    normalized = SAFE_TOKEN_PATTERN.sub("-", value.strip()).strip("-")
+    if not normalized:
+        raise ValueError("uniqueness token must not be empty")
+    return normalized

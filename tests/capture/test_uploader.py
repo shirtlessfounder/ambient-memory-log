@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 import importlib
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -114,6 +115,12 @@ def write_chunk(path: Path) -> Path:
     return path
 
 
+def as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 def test_chunk_key_includes_source_and_timestamp() -> None:
     s3_store = load_s3_store()
 
@@ -136,6 +143,26 @@ def test_chunk_key_avoids_same_second_collisions_for_same_source() -> None:
 
     assert first_key.startswith("raw-audio/desk-a/2026/04/02/")
     assert second_key.startswith("raw-audio/desk-a/2026/04/02/")
+    assert first_key != second_key
+
+
+def test_chunk_key_preserves_session_token_for_same_second_chunks() -> None:
+    s3_store = load_s3_store()
+    started_at = datetime(2026, 4, 2, 13, 0, 0, tzinfo=UTC)
+
+    first_key = s3_store.build_chunk_key(
+        "desk-a",
+        started_at,
+        uniqueness_token="session-a",
+    )
+    second_key = s3_store.build_chunk_key(
+        "desk-a",
+        started_at,
+        uniqueness_token="session-b",
+    )
+
+    assert first_key == "raw-audio/desk-a/2026/04/02/20260402T130000.000000Z-session-a.wav"
+    assert second_key == "raw-audio/desk-a/2026/04/02/20260402T130000.000000Z-session-b.wav"
     assert first_key != second_key
 
 
@@ -268,6 +295,7 @@ def test_chunk_uploader_uploads_ready_chunks_and_updates_heartbeat(
         source_id="desk-a",
         source_type="macbook",
         device_owner="Dylan",
+        local_timezone=ZoneInfo("America/New_York"),
     )
 
     result = uploader.upload_ready()
@@ -284,7 +312,9 @@ def test_chunk_uploader_uploads_ready_chunks_and_updates_heartbeat(
     assert result.failed == 0
     assert stored_chunk is not None
     assert stored_chunk.status == "uploaded"
-    assert stored_chunk.s3_key == "raw-audio/desk-a/2026/04/02/20260402T090000.000000Z.wav"
+    assert as_utc(stored_chunk.started_at) == datetime(2026, 4, 2, 13, 0, 0, tzinfo=UTC)
+    assert as_utc(stored_chunk.ended_at) == datetime(2026, 4, 2, 13, 0, 30, tzinfo=UTC)
+    assert stored_chunk.s3_key == "raw-audio/desk-a/2026/04/02/20260402T130000.000000Z-session.wav"
     assert heartbeat is not None
     assert heartbeat.source_id == "desk-a"
     assert heartbeat.last_upload_at is not None
@@ -309,6 +339,7 @@ def test_chunk_uploader_moves_failed_uploads_into_retry_backlog(
         source_id="desk-a",
         source_type="macbook",
         device_owner="Dylan",
+        local_timezone=ZoneInfo("America/New_York"),
     )
 
     result = uploader.upload_ready()
@@ -320,3 +351,50 @@ def test_chunk_uploader_moves_failed_uploads_into_retry_backlog(
     assert result.failed == 1
     assert retry_entries[0].path.parent == spool.retry_dir
     assert retry_entries[0].attempts == 1
+
+
+def test_chunk_uploader_keeps_same_second_cross_run_chunks_distinct(
+    tmp_path: Path,
+    session_factory: sessionmaker[Session],
+) -> None:
+    uploader_module = load_uploader_module()
+    spool_module = load_spool_module()
+    client = RecordingS3Client()
+    spool = spool_module.LocalSpool(tmp_path / "spool", settle_seconds=0)
+    write_chunk(spool.root / "chunk-session-a-20260402T090000.wav")
+    write_chunk(spool.root / "chunk-session-b-20260402T090000.wav")
+
+    uploader = uploader_module.ChunkUploader(
+        spool=spool,
+        s3_client=client,
+        session_factory=session_factory,
+        bucket="ambient-memory",
+        source_id="desk-a",
+        source_type="macbook",
+        device_owner="Dylan",
+        local_timezone=ZoneInfo("America/New_York"),
+    )
+
+    result = uploader.upload_ready()
+
+    session = session_factory()
+    try:
+        rows = session.scalars(select(AudioChunk).order_by(AudioChunk.s3_key)).all()
+    finally:
+        session.close()
+
+    assert result.attempted == 2
+    assert result.uploaded == 2
+    assert result.failed == 0
+    assert [as_utc(row.started_at) for row in rows] == [
+        datetime(2026, 4, 2, 13, 0, 0, tzinfo=UTC),
+        datetime(2026, 4, 2, 13, 0, 0, tzinfo=UTC),
+    ]
+    assert [row.s3_key for row in rows] == [
+        "raw-audio/desk-a/2026/04/02/20260402T130000.000000Z-session-a.wav",
+        "raw-audio/desk-a/2026/04/02/20260402T130000.000000Z-session-b.wav",
+    ]
+    assert [call["Key"] for call in client.put_calls] == [
+        "raw-audio/desk-a/2026/04/02/20260402T130000.000000Z-session-a.wav",
+        "raw-audio/desk-a/2026/04/02/20260402T130000.000000Z-session-b.wav",
+    ]
