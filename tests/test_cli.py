@@ -58,6 +58,47 @@ def test_cli_agent_run_wires_dry_run_flag(monkeypatch) -> None:
     }
 
 
+def test_cli_worker_run_once_wires_dry_run_flag(monkeypatch) -> None:
+    from ambient_memory import cli
+
+    calls: dict[str, object] = {}
+
+    class Result:
+        dry_run = True
+        pending_chunks = 3
+        windows = 2
+        processed_chunks = 0
+        failed_chunks = 0
+
+    def fake_run_worker_once(*, dry_run: bool):
+        calls["dry_run"] = dry_run
+        return Result()
+
+    monkeypatch.setattr(cli, "run_worker_once", fake_run_worker_once)
+
+    result = runner.invoke(app, ["worker", "run-once", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert calls == {"dry_run": True}
+    assert "pending" in result.output.lower()
+
+
+def test_cli_worker_run_wires_poll_seconds(monkeypatch) -> None:
+    from ambient_memory import cli
+
+    calls: dict[str, object] = {}
+
+    def fake_run_worker(*, poll_seconds: float) -> None:
+        calls["poll_seconds"] = poll_seconds
+
+    monkeypatch.setattr(cli, "run_worker_loop", fake_run_worker)
+
+    result = runner.invoke(app, ["worker", "run", "--poll-seconds", "2.5"])
+
+    assert result.exit_code == 0
+    assert calls == {"poll_seconds": 2.5}
+
+
 def test_cli_enroll_voiceprint_help_lists_required_options() -> None:
     result = runner.invoke(app, ["enroll", "voiceprint", "--help"])
 

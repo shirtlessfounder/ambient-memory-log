@@ -7,6 +7,7 @@ from ambient_memory.capture.agent import list_local_audio_devices, run_capture_a
 from ambient_memory.config import EnrollmentSettings
 from ambient_memory.db import create_voiceprint, session_scope
 from ambient_memory.integrations.pyannote_client import PyannoteClient
+from ambient_memory.pipeline.worker import run_worker_loop, run_worker_once
 
 
 class HelpTyper(Typer):
@@ -49,6 +50,31 @@ def agent_run(
         ffmpeg_binary=ffmpeg_binary,
         device_selection=device_selection,
     )
+
+
+@worker_app.command("run-once")
+def worker_run_once_command(
+    dry_run: bool = Option(False, "--dry-run", help="Report pending uploaded chunks without mutating data."),
+) -> None:
+    """Process uploaded audio chunks once."""
+    result = run_worker_once(dry_run=dry_run)
+    if dry_run:
+        print(f"Pending uploaded chunks: {result.pending_chunks} across {result.windows} window(s)")
+        return
+
+    print(
+        "Processed "
+        f"{result.processed_chunks} chunk(s) across {result.windows} window(s); "
+        f"failed {result.failed_chunks}"
+    )
+
+
+@worker_app.command("run")
+def worker_run(
+    poll_seconds: float = Option(5.0, "--poll-seconds", min=0.1, help="Seconds to wait between worker polls."),
+) -> None:
+    """Poll and process uploaded audio chunks continuously."""
+    run_worker_loop(poll_seconds=poll_seconds)
 
 
 @enroll_app.command("voiceprint")
