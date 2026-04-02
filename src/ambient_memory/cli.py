@@ -4,7 +4,7 @@ from typer import Option, Typer
 from typer.testing import CliRunner
 
 from ambient_memory.capture.agent import list_local_audio_devices, run_capture_agent
-from ambient_memory.config import Settings
+from ambient_memory.config import EnrollmentSettings
 from ambient_memory.db import create_voiceprint, session_scope
 from ambient_memory.integrations.pyannote_client import PyannoteClient
 
@@ -65,7 +65,7 @@ def enroll_voiceprint(
     ),
 ) -> None:
     """Enroll a reusable speaker voiceprint."""
-    settings = Settings()
+    settings = EnrollmentSettings()
     client = PyannoteClient(api_key=settings.pyannote_api_key)
     voiceprint_id = client.enroll_voiceprint(
         label=label,

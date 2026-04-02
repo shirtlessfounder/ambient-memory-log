@@ -76,19 +76,10 @@ def test_cli_enroll_voiceprint_creates_voiceprint(monkeypatch, tmp_path) -> None
 
     calls: dict[str, object] = {}
 
-    class FakeSettings:
+    class FakeEnrollmentSettings:
         pyannote_api_key = "secret"
         database_url = "postgresql://example"
         database_ssl_root_cert = None
-        aws_region = "us-east-1"
-        s3_bucket = "bucket"
-        deepgram_api_key = "deepgram"
-        source_id = "desk-a"
-        source_type = "local"
-        device_owner = "dylan"
-        spool_dir = str(tmp_path)
-        active_start_local = "09:00"
-        active_end_local = "18:00"
 
     class FakeClient:
         def __init__(self, *, api_key: str) -> None:
@@ -114,7 +105,7 @@ def test_cli_enroll_voiceprint_creates_voiceprint(monkeypatch, tmp_path) -> None
         }
         return object()
 
-    monkeypatch.setattr(cli, "Settings", lambda: FakeSettings())
+    monkeypatch.setattr(cli, "EnrollmentSettings", lambda: FakeEnrollmentSettings())
     monkeypatch.setattr(cli, "PyannoteClient", FakeClient)
     monkeypatch.setattr(cli, "session_scope", fake_session_scope)
     monkeypatch.setattr(cli, "create_voiceprint", fake_create_voiceprint)
