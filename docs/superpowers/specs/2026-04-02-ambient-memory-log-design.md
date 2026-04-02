@@ -14,9 +14,11 @@ The recommended MVP is a hybrid capture topology:
 - 1 central room capture box with 1-2 hidden wired room microphones for roam zones
 - raw audio stored in Amazon S3 forever
 - delayed processing in 30-60 second windows for better speaker labeling and dedup
-- hosted speech-to-text for transcription
+- one hosted speech-to-text vendor for transcription
 - pyannote voiceprints for persistent speaker identity
-- internal merge/dedup logic to produce one canonical conversation log
+- one pipeline worker that performs transcription, speaker matching, merge, and dedup
+- PostgreSQL on Amazon RDS as the only structured datastore for the MVP
+- internal merge/dedup logic to produce one canonical conversation log and basic search surface
 
 This is primarily a systems-integration project, not a model-training project.
 
@@ -115,7 +117,7 @@ The central room box should be treated as just another source from the backend's
 Use two persistence surfaces:
 
 - Amazon S3 for raw audio blobs
-- AWS database for structured transcript records and metadata
+- PostgreSQL on Amazon RDS for structured transcript records and metadata
 
 The database stores:
 
@@ -131,7 +133,7 @@ The database should not store audio blobs directly.
 
 ### Processing Layer
 
-Processing runs in delayed windows, likely every 30-60 seconds:
+Processing runs in delayed windows, likely every 30-60 seconds. For the MVP, one pipeline worker can handle the full post-ingest flow:
 
 1. detect newly uploaded chunks
 2. group them by time window
@@ -144,31 +146,30 @@ This is intentionally not a hard realtime pipeline. Quality is prioritized over 
 
 ### Component Boundaries
 
-The MVP should be split into clear units with narrow interfaces:
+The lean MVP should be split into five units:
 
 - capture agent
   - records local audio
   - writes chunks to S3
   - emits chunk metadata and health status
-- ingest coordinator
-  - receives new-chunk events
-  - groups chunks into processing windows
-  - schedules downstream work
-- transcription worker
-  - fetches source audio
-  - calls the hosted STT vendor
-  - emits timestamped segment candidates
-- speaker matching worker
-  - scores segment-to-person matches using enrolled voiceprints
-  - emits named speaker candidates plus confidence
-- merge/dedup worker
-  - reconciles competing source transcripts
-  - emits one canonical utterance record plus provenance
-- transcript store and search index
-  - persists the canonical log
-  - supports transcript search and replay lookup
+- S3 raw-audio store
+  - stores immutable audio chunks
+  - serves as the durable source of truth for replay and reprocessing
+- pipeline worker
+  - polls for new chunks or receives chunk-created events
+  - groups windows
+  - calls STT
+  - runs speaker matching
+  - performs merge/dedup
+  - writes canonical transcript rows
+- Postgres transcript store
+  - persists canonical utterances and provenance
+  - supports basic transcript search and replay lookup
+- external model providers
+  - STT vendor
+  - pyannote voiceprint matching
 
-Each unit should communicate through durable records or queued jobs, not in-memory coupling.
+This can be broken into more services later, but the MVP should stay collapsed unless scale or reliability proves it necessary.
 
 ## Audio Topology
 
@@ -224,11 +225,10 @@ Reference:
 
 Use a hosted speech-to-text vendor for the MVP. The main job of the vendor is transcription plus timestamped segmentation. The system should avoid binding too much product logic to one vendor's diarization output.
 
-Recommended initial bake-off:
+Recommended MVP default:
 
-- Deepgram first
-- AssemblyAI second
-- optional third candidate from the current Artificial Analysis leaders if implementation effort is reasonable
+- start with Deepgram only
+- switch vendors only if quality or integration is clearly unacceptable
 
 Reasoning:
 
@@ -247,7 +247,9 @@ Identity heuristics:
 
 ### Storage
 
-Use Amazon S3 directly for raw audio retention. Keep audio forever from day 1 if that simplifies the prototype. Add lifecycle/archival later if needed.
+Use Amazon S3 directly for raw audio retention and the existing Amazon RDS PostgreSQL database for structured data. Keep audio forever from day 1 if that simplifies the prototype. Add lifecycle/archival later if needed.
+
+The database connection should be provided via environment/configuration. Do not commit the literal connection string or certificate path into the repository.
 
 ## Processing Pipeline
 
@@ -271,7 +273,7 @@ Each chunk should include:
 
 ### 2. Ingest
 
-When a chunk lands in S3, enqueue it for processing. The backend groups chunks into overlapping windows, likely 30-60 seconds, to allow better merge and speaker inference.
+When a chunk lands in S3, mark it available for processing. The pipeline worker groups chunks into overlapping windows, likely 30-60 seconds, to allow better merge and speaker inference.
 
 ### 3. Transcription
 
@@ -339,6 +341,8 @@ Persist a single merged event stream with:
 - raw_audio_pointers
 - processing_version
 
+For the MVP, this canonical log lives in Postgres and also serves as the first search surface. Do not add a separate search system until simple Postgres text search proves insufficient.
+
 ### 7. Replay and Reprocessing
 
 The system must support:
@@ -369,11 +373,13 @@ Minimum reliability behaviors:
 - local MacBook capture agents
 - central room capture source
 - raw audio uploads to S3
+- Postgres on RDS as the structured store
 - transcription via hosted API
 - one-time voice enrollment for 4 users
 - speaker naming with confidence
 - delayed merge/dedup
 - canonical searchable transcript store
+- basic search in Postgres
 
 ### Out of Scope
 
@@ -383,6 +389,9 @@ Minimum reliability behaviors:
 - mobile apps
 - custom model training
 - fine-grained admin policy tooling
+- separate streaming transcription stack
+- separate dedicated search/index system
+- multi-vendor STT bake-off before first signal
 
 ## Success Criteria
 
@@ -413,13 +422,25 @@ The first prototype should assume:
 
 This is a prototype to determine whether ambient hybrid capture yields useful searchable memory, not a production conference-room deployment.
 
+## Zero-Tradeoff MVP Simplifications
+
+The following simplifications are intentionally part of the MVP because they reduce complexity without changing the approved product boundary:
+
+- use pre-recorded chunk transcription, not websocket realtime transcription
+- use one pipeline worker instead of separate ingest/transcription/identity/dedup services
+- use one STT vendor first instead of a bake-off in v1
+- use S3 for raw audio and Postgres for everything structured
+- use Postgres text search before introducing a separate search/index layer
+- treat the room capture box exactly like another capture agent with a different source_type
+- record continuously during the active window instead of adding local VAD/start-stop logic
+
+These are deferrals, not reversals. They can be expanded later if the MVP proves useful.
+
 ## Open Decisions For Planning
 
 - exact local capture implementation per MacBook
 - exact central capture hardware
-- exact STT vendor chosen after bake-off
 - transcript database schema
-- canonical search/index backend
 - correction workflow for wrong speaker attribution
 - observability and ops model for long-running daily capture
 
@@ -429,10 +450,10 @@ Write an implementation plan focused on:
 
 - capture agents
 - S3 ingest path
-- transcription worker
+- single pipeline worker
 - voice enrollment and speaker matching
 - merge/dedup engine
-- searchable transcript store
+- Postgres transcript schema and basic search
 
 ## References
 
