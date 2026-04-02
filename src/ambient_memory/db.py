@@ -7,7 +7,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from ambient_memory.config import Settings
-from ambient_memory.models import AgentHeartbeat, AudioChunk, Source
+from ambient_memory.models import AgentHeartbeat, AudioChunk, Source, Voiceprint
 
 
 def normalize_database_url(url: str) -> str:
@@ -146,3 +146,22 @@ def record_agent_heartbeat(
 
     session.flush()
     return heartbeat
+
+
+def create_voiceprint(
+    session: Session,
+    *,
+    speaker_label: str,
+    provider_voiceprint_id: str,
+    source_audio_key: str | None = None,
+    provider: str = "pyannote",
+) -> Voiceprint:
+    row = Voiceprint(
+        speaker_label=speaker_label,
+        provider=provider,
+        provider_voiceprint_id=provider_voiceprint_id,
+        source_audio_key=source_audio_key,
+    )
+    session.add(row)
+    session.flush()
+    return row

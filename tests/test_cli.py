@@ -13,6 +13,7 @@ def test_cli_lists_expected_commands() -> None:
     assert "agent" in help_text
     assert "worker" in help_text
     assert "api" in help_text
+    assert "enroll" in help_text
     assert "list-devices" in help_text
 
 
@@ -54,4 +55,81 @@ def test_cli_agent_run_wires_dry_run_flag(monkeypatch) -> None:
         "dry_run": True,
         "ffmpeg_binary": "ffmpeg",
         "device_selection": None,
+    }
+
+
+def test_cli_enroll_voiceprint_help_lists_required_options() -> None:
+    result = runner.invoke(app, ["enroll", "voiceprint", "--help"])
+
+    assert result.exit_code == 0
+    assert "--label" in result.output
+    assert "--audio" in result.output
+
+
+def test_cli_enroll_voiceprint_creates_voiceprint(monkeypatch, tmp_path) -> None:
+    from contextlib import contextmanager
+
+    from ambient_memory import cli
+
+    audio_path = tmp_path / "sample.wav"
+    audio_path.write_bytes(b"audio-bytes")
+
+    calls: dict[str, object] = {}
+
+    class FakeSettings:
+        pyannote_api_key = "secret"
+        database_url = "postgresql://example"
+        database_ssl_root_cert = None
+        aws_region = "us-east-1"
+        s3_bucket = "bucket"
+        deepgram_api_key = "deepgram"
+        source_id = "desk-a"
+        source_type = "local"
+        device_owner = "dylan"
+        spool_dir = str(tmp_path)
+        active_start_local = "09:00"
+        active_end_local = "18:00"
+
+    class FakeClient:
+        def __init__(self, *, api_key: str) -> None:
+            calls["api_key"] = api_key
+
+        def enroll_voiceprint(self, *, label: str, audio_bytes: bytes, filename: str) -> str:
+            calls["label"] = label
+            calls["audio_bytes"] = audio_bytes
+            calls["filename"] = filename
+            return "vp_123"
+
+    @contextmanager
+    def fake_session_scope(settings: object):
+        calls["session_settings"] = settings
+        yield object()
+
+    def fake_create_voiceprint(session: object, *, speaker_label: str, provider_voiceprint_id: str, source_audio_key: str | None):
+        calls["saved"] = {
+            "session": session,
+            "speaker_label": speaker_label,
+            "provider_voiceprint_id": provider_voiceprint_id,
+            "source_audio_key": source_audio_key,
+        }
+        return object()
+
+    monkeypatch.setattr(cli, "Settings", lambda: FakeSettings())
+    monkeypatch.setattr(cli, "PyannoteClient", FakeClient)
+    monkeypatch.setattr(cli, "session_scope", fake_session_scope)
+    monkeypatch.setattr(cli, "create_voiceprint", fake_create_voiceprint)
+
+    result = runner.invoke(app, ["enroll", "voiceprint", "--label", "Dylan", "--audio", str(audio_path)])
+
+    assert result.exit_code == 0
+    assert "Created voiceprint for Dylan" in result.output
+    assert calls["api_key"] == "secret"
+    assert calls["label"] == "Dylan"
+    assert calls["audio_bytes"] == b"audio-bytes"
+    assert calls["filename"] == "sample.wav"
+    assert calls["saved"] == {
+        "session": calls["saved"]["session"],
+        "speaker_label": "Dylan",
+        "provider_voiceprint_id": "vp_123",
+        "source_audio_key": str(audio_path),
     }

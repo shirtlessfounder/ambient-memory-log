@@ -1,7 +1,12 @@
+from pathlib import Path
+
 from typer import Option, Typer
 from typer.testing import CliRunner
 
 from ambient_memory.capture.agent import list_local_audio_devices, run_capture_agent
+from ambient_memory.config import Settings
+from ambient_memory.db import create_voiceprint, session_scope
+from ambient_memory.integrations.pyannote_client import PyannoteClient
 
 
 class HelpTyper(Typer):
@@ -44,6 +49,39 @@ def agent_run(
         ffmpeg_binary=ffmpeg_binary,
         device_selection=device_selection,
     )
+
+
+@enroll_app.command("voiceprint")
+def enroll_voiceprint(
+    label: str = Option(..., "--label", help="Speaker label to associate with the voiceprint."),
+    audio: Path = Option(
+        ...,
+        "--audio",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+        help="Path to a single-speaker enrollment audio file.",
+    ),
+) -> None:
+    """Enroll a reusable speaker voiceprint."""
+    settings = Settings()
+    client = PyannoteClient(api_key=settings.pyannote_api_key)
+    voiceprint_id = client.enroll_voiceprint(
+        label=label,
+        audio_bytes=audio.read_bytes(),
+        filename=audio.name,
+    )
+
+    with session_scope(settings) as session:
+        create_voiceprint(
+            session,
+            speaker_label=label,
+            provider_voiceprint_id=voiceprint_id,
+            source_audio_key=str(audio),
+        )
+
+    print(f"Created voiceprint for {label}")
 
 
 def main() -> None:
