@@ -1,11 +1,13 @@
+from datetime import UTC, datetime
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from ambient_memory.config import Settings
+from ambient_memory.models import AudioChunk
 
 
 def normalize_database_url(url: str) -> str:
@@ -38,3 +40,44 @@ def session_scope(settings: Settings) -> Iterator[Session]:
         raise
     finally:
         session.close()
+
+
+def register_uploaded_chunk(
+    session: Session,
+    *,
+    source_id: str,
+    s3_bucket: str,
+    s3_key: str,
+    started_at: datetime,
+    ended_at: datetime,
+    checksum: str | None = None,
+) -> AudioChunk:
+    row = session.scalar(
+        select(AudioChunk).where(
+            AudioChunk.s3_bucket == s3_bucket,
+            AudioChunk.s3_key == s3_key,
+        )
+    )
+
+    if row is None:
+        row = AudioChunk(
+            source_id=source_id,
+            s3_bucket=s3_bucket,
+            s3_key=s3_key,
+            started_at=started_at,
+            ended_at=ended_at,
+        )
+        session.add(row)
+
+    row.source_id = source_id
+    row.s3_bucket = s3_bucket
+    row.s3_key = s3_key
+    row.checksum = checksum
+    row.status = "uploaded"
+    row.started_at = started_at
+    row.ended_at = ended_at
+    row.uploaded_at = datetime.now(UTC)
+    row.error_message = None
+
+    session.flush()
+    return row
