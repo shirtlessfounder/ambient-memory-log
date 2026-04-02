@@ -5,6 +5,7 @@ description = "Ambient memory log MVP"
 requires-python = ">=3.12"
 dependencies = [
   "alembic>=1.15.2",
+  "boto3>=1.40.48",
   "pydantic-settings>=2.8.1",
   "psycopg[binary]>=3.2.6",
   "sqlalchemy>=2.0.40",

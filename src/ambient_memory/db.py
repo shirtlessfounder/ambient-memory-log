@@ -7,7 +7,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from ambient_memory.config import Settings
-from ambient_memory.models import AudioChunk
+from ambient_memory.models import AgentHeartbeat, AudioChunk, Source
 
 
 def normalize_database_url(url: str) -> str:
@@ -46,12 +46,22 @@ def register_uploaded_chunk(
     session: Session,
     *,
     source_id: str,
+    source_type: str | None = None,
+    device_owner: str | None = None,
     s3_bucket: str,
     s3_key: str,
     started_at: datetime,
     ended_at: datetime,
     checksum: str | None = None,
 ) -> AudioChunk:
+    if source_type is not None:
+        upsert_source(
+            session,
+            source_id=source_id,
+            source_type=source_type,
+            device_owner=device_owner,
+        )
+
     row = session.scalar(
         select(AudioChunk).where(
             AudioChunk.s3_bucket == s3_bucket,
@@ -81,3 +91,58 @@ def register_uploaded_chunk(
 
     session.flush()
     return row
+
+
+def upsert_source(
+    session: Session,
+    *,
+    source_id: str,
+    source_type: str,
+    device_owner: str | None = None,
+) -> Source:
+    row = session.get(Source, source_id)
+    if row is None:
+        row = Source(
+            id=source_id,
+            source_type=source_type,
+            device_owner=device_owner,
+        )
+        session.add(row)
+
+    row.source_type = source_type
+    if device_owner is not None:
+        row.device_owner = device_owner
+    row.is_active = True
+
+    session.flush()
+    return row
+
+
+def record_agent_heartbeat(
+    session: Session,
+    *,
+    source_id: str,
+    seen_at: datetime | None = None,
+    uploaded_at: datetime | None = None,
+    source_type: str | None = None,
+    device_owner: str | None = None,
+) -> AgentHeartbeat:
+    if source_type is not None:
+        upsert_source(
+            session,
+            source_id=source_id,
+            source_type=source_type,
+            device_owner=device_owner,
+        )
+
+    heartbeat = session.get(AgentHeartbeat, source_id)
+    if heartbeat is None:
+        heartbeat = AgentHeartbeat(source_id=source_id)
+        session.add(heartbeat)
+
+    heartbeat.last_seen_at = seen_at or datetime.now(UTC)
+    if uploaded_at is not None:
+        heartbeat.last_upload_at = uploaded_at
+
+    session.flush()
+    return heartbeat

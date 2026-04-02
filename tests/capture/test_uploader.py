@@ -1,12 +1,13 @@
 from datetime import UTC, datetime, timedelta
 import importlib
+from pathlib import Path
 from typing import Any
 
 import pytest
 from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
-from ambient_memory.models import AudioChunk, Source
+from ambient_memory.models import AgentHeartbeat, AudioChunk, Source
 
 
 def load_s3_store() -> Any:
@@ -32,6 +33,30 @@ def load_register_uploaded_chunk() -> Any:
     return register_uploaded_chunk
 
 
+def load_uploader_module() -> Any:
+    try:
+        module = importlib.import_module("ambient_memory.capture.uploader")
+    except ModuleNotFoundError as exc:
+        pytest.fail(f"missing uploader module: {exc}")
+
+    if not hasattr(module, "ChunkUploader"):
+        pytest.fail("missing uploader symbol: ChunkUploader")
+
+    return module
+
+
+def load_spool_module() -> Any:
+    try:
+        module = importlib.import_module("ambient_memory.capture.spool")
+    except ModuleNotFoundError as exc:
+        pytest.fail(f"missing spool module: {exc}")
+
+    if not hasattr(module, "LocalSpool"):
+        pytest.fail("missing spool symbol: LocalSpool")
+
+    return module
+
+
 class RecordingS3Client:
     def __init__(self) -> None:
         self.put_calls: list[dict[str, Any]] = []
@@ -52,20 +77,41 @@ class RecordingS3Client:
         return f"https://example.test/{Params['Bucket']}/{Params['Key']}?expires={ExpiresIn}"
 
 
+class FailingS3Client:
+    def put_object(self, **_: Any) -> dict[str, str]:
+        raise RuntimeError("network down")
+
+
 @pytest.fixture
-def session() -> Session:
+def session_factory() -> sessionmaker[Session]:
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
     Source.__table__.create(bind=engine)
     AudioChunk.__table__.create(bind=engine)
+    AgentHeartbeat.__table__.create(bind=engine)
 
-    session = Session(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = factory()
     session.add(Source(id="desk-a", source_type="macbook", device_owner="Dylan"))
     session.commit()
+    session.close()
+
+    return factory
+
+
+@pytest.fixture
+def session(session_factory: sessionmaker[Session]) -> Session:
+    session = session_factory()
 
     try:
         yield session
     finally:
         session.close()
+
+
+def write_chunk(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"audio-bytes")
+    return path
 
 
 def test_chunk_key_includes_source_and_timestamp() -> None:
@@ -202,3 +248,75 @@ def test_register_uploaded_chunk_updates_existing_row(session: Session) -> None:
     assert row.status == "uploaded"
     assert row.checksum == "sha256:new"
     assert row.error_message is None
+
+
+def test_chunk_uploader_uploads_ready_chunks_and_updates_heartbeat(
+    tmp_path: Path,
+    session_factory: sessionmaker[Session],
+) -> None:
+    uploader_module = load_uploader_module()
+    spool_module = load_spool_module()
+    client = RecordingS3Client()
+    spool = spool_module.LocalSpool(tmp_path / "spool", settle_seconds=0)
+    write_chunk(spool.root / "chunk-session-20260402T090000.wav")
+
+    uploader = uploader_module.ChunkUploader(
+        spool=spool,
+        s3_client=client,
+        session_factory=session_factory,
+        bucket="ambient-memory",
+        source_id="desk-a",
+        source_type="macbook",
+        device_owner="Dylan",
+    )
+
+    result = uploader.upload_ready()
+
+    session = session_factory()
+    try:
+        stored_chunk = session.scalar(select(AudioChunk))
+        heartbeat = session.scalar(select(AgentHeartbeat))
+    finally:
+        session.close()
+
+    assert result.attempted == 1
+    assert result.uploaded == 1
+    assert result.failed == 0
+    assert stored_chunk is not None
+    assert stored_chunk.status == "uploaded"
+    assert stored_chunk.s3_key == "raw-audio/desk-a/2026/04/02/20260402T090000.000000Z.wav"
+    assert heartbeat is not None
+    assert heartbeat.source_id == "desk-a"
+    assert heartbeat.last_upload_at is not None
+    assert client.put_calls[0]["Metadata"]["source_type"] == "macbook"
+    assert not list(spool.root.glob("*.wav"))
+
+
+def test_chunk_uploader_moves_failed_uploads_into_retry_backlog(
+    tmp_path: Path,
+    session_factory: sessionmaker[Session],
+) -> None:
+    uploader_module = load_uploader_module()
+    spool_module = load_spool_module()
+    spool = spool_module.LocalSpool(tmp_path / "spool", settle_seconds=0)
+    write_chunk(spool.root / "chunk-session-20260402T090000.wav")
+
+    uploader = uploader_module.ChunkUploader(
+        spool=spool,
+        s3_client=FailingS3Client(),
+        session_factory=session_factory,
+        bucket="ambient-memory",
+        source_id="desk-a",
+        source_type="macbook",
+        device_owner="Dylan",
+    )
+
+    result = uploader.upload_ready()
+
+    retry_entries = spool.iter_ready()
+
+    assert result.attempted == 1
+    assert result.uploaded == 0
+    assert result.failed == 1
+    assert retry_entries[0].path.parent == spool.retry_dir
+    assert retry_entries[0].attempts == 1
