@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from ambient_memory.config import Settings
+from ambient_memory.config import DatabaseSettings
 from ambient_memory.models import AgentHeartbeat, AudioChunk, Source, Voiceprint
 
 
@@ -16,7 +16,7 @@ def normalize_database_url(url: str) -> str:
     return url
 
 
-def build_engine(settings: Settings) -> Engine:
+def build_engine(settings: DatabaseSettings) -> Engine:
     connect_args: dict[str, str] = {}
     if settings.database_ssl_root_cert:
         connect_args["sslrootcert"] = settings.database_ssl_root_cert
@@ -24,12 +24,12 @@ def build_engine(settings: Settings) -> Engine:
     return create_engine(normalize_database_url(settings.database_url), connect_args=connect_args, future=True)
 
 
-def build_session_factory(settings: Settings) -> sessionmaker[Session]:
+def build_session_factory(settings: DatabaseSettings) -> sessionmaker[Session]:
     return sessionmaker(bind=build_engine(settings), expire_on_commit=False)
 
 
 @contextmanager
-def session_scope(settings: Settings) -> Iterator[Session]:
+def session_scope(settings: DatabaseSettings) -> Iterator[Session]:
     factory = build_session_factory(settings)
     session = factory()
     try:
@@ -78,6 +78,8 @@ def register_uploaded_chunk(
             ended_at=ended_at,
         )
         session.add(row)
+    elif row.status != "uploaded":
+        return row
 
     row.source_id = source_id
     row.s3_bucket = s3_bucket

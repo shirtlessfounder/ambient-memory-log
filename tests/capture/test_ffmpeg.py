@@ -29,7 +29,7 @@ def test_build_capture_command_sets_segment_duration():
 
     assert command[command.index("-segment_time") + 1] == "30"
     assert command[command.index("-strftime") + 1] == "1"
-    assert command[-1] == "/tmp/ambient-spool/chunk-capture-session-%Y%m%dT%H%M%S.wav"
+    assert command[-1] == "/tmp/ambient-spool/chunk-capture-session-%Y%m%dT%H%M%S%z.wav"
 
 
 def test_build_capture_command_uses_stable_wav_settings():
@@ -52,7 +52,7 @@ def test_build_capture_command_writes_chunks_into_spool_dir():
         session_id="capture-session",
     )
 
-    assert command[-1] == str(spool_dir / "chunk-capture-session-%Y%m%dT%H%M%S.wav")
+    assert command[-1] == str(spool_dir / "chunk-capture-session-%Y%m%dT%H%M%S%z.wav")
 
 
 def test_build_capture_command_uses_non_interactive_output_flags():

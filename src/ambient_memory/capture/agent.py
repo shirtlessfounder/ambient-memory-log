@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, time
 import logging
-import os
 from pathlib import Path
 import subprocess
 from time import sleep
@@ -13,16 +12,12 @@ from ambient_memory.capture.device_discovery import AudioDevice, select_audio_de
 from ambient_memory.capture.ffmpeg import DEFAULT_SEGMENT_SECONDS, build_capture_command
 from ambient_memory.capture.spool import LocalSpool
 from ambient_memory.capture.uploader import ChunkUploader
+from ambient_memory.config import CaptureSettings, DatabaseSettings
 from ambient_memory.db import build_session_factory, record_agent_heartbeat
 from ambient_memory.logging import configure_logging
 
 
 LOGGER = logging.getLogger(__name__)
-DEFAULT_ACTIVE_START = "09:00"
-DEFAULT_ACTIVE_END = "00:00"
-DEFAULT_SOURCE_ID = "desk-a"
-DEFAULT_SOURCE_TYPE = "macbook"
-DEFAULT_SPOOL_DIR = "./spool"
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,12 +31,6 @@ class AgentRuntimeConfig:
     aws_region: str | None = None
     s3_bucket: str | None = None
     database_url: str | None = None
-    database_ssl_root_cert: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class DatabaseRuntimeSettings:
-    database_url: str
     database_ssl_root_cert: str | None = None
 
 
@@ -216,7 +205,7 @@ def run_capture_agent(
 
     s3_client = build_s3_client(config.aws_region)
     session_factory = build_session_factory(
-        DatabaseRuntimeSettings(
+        DatabaseSettings(
             database_url=config.database_url,
             database_ssl_root_cert=config.database_ssl_root_cert,
         )
@@ -253,12 +242,13 @@ def is_within_active_window(*, now: time, start: time, end: time) -> bool:
 
 
 def load_runtime_config(*, dry_run: bool) -> AgentRuntimeConfig:
-    source_id = os.getenv("SOURCE_ID", DEFAULT_SOURCE_ID)
-    source_type = os.getenv("SOURCE_TYPE", DEFAULT_SOURCE_TYPE)
-    spool_dir = Path(os.getenv("SPOOL_DIR", DEFAULT_SPOOL_DIR))
-    active_start_local = os.getenv("ACTIVE_START_LOCAL", DEFAULT_ACTIVE_START)
-    active_end_local = os.getenv("ACTIVE_END_LOCAL", DEFAULT_ACTIVE_END)
-    device_owner = os.getenv("DEVICE_OWNER")
+    settings = CaptureSettings()
+    source_id = settings.source_id
+    source_type = settings.source_type
+    spool_dir = Path(settings.spool_dir)
+    active_start_local = settings.active_start_local
+    active_end_local = settings.active_end_local
+    device_owner = settings.device_owner
 
     if dry_run:
         return AgentRuntimeConfig(
@@ -271,9 +261,9 @@ def load_runtime_config(*, dry_run: bool) -> AgentRuntimeConfig:
         )
 
     required = {
-        "AWS_REGION": os.getenv("AWS_REGION"),
-        "S3_BUCKET": os.getenv("S3_BUCKET"),
-        "DATABASE_URL": os.getenv("DATABASE_URL"),
+        "AWS_REGION": settings.aws_region,
+        "S3_BUCKET": settings.s3_bucket,
+        "DATABASE_URL": settings.database_url,
     }
     missing = [name for name, value in required.items() if not value]
     if missing:
@@ -289,7 +279,7 @@ def load_runtime_config(*, dry_run: bool) -> AgentRuntimeConfig:
         aws_region=required["AWS_REGION"],
         s3_bucket=required["S3_BUCKET"],
         database_url=required["DATABASE_URL"],
-        database_ssl_root_cert=os.getenv("DATABASE_SSL_ROOT_CERT"),
+        database_ssl_root_cert=settings.database_ssl_root_cert,
     )
 
 

@@ -16,7 +16,7 @@ from ambient_memory.integrations.s3_store import upload_chunk
 
 
 CHUNK_FILENAME_PATTERN = re.compile(
-    r"^chunk-(?:(?P<uniqueness_token>.+)-)?(?P<timestamp>\d{8}T\d{6})\.(?P<extension>[^.]+)$"
+    r"^chunk-(?:(?P<uniqueness_token>.+)-)?(?P<timestamp>\d{8}T\d{6}(?:[+-]\d{4})?)\.(?P<extension>[^.]+)$"
 )
 
 
@@ -133,7 +133,11 @@ class ChunkUploader:
         if match is None:
             raise ValueError(f"chunk filename does not include timestamp: {path.name}")
 
-        naive_started_at = datetime.strptime(match.group("timestamp"), "%Y%m%dT%H%M%S")
+        timestamp = match.group("timestamp")
+        if len(timestamp) == 20:
+            return datetime.strptime(timestamp, "%Y%m%dT%H%M%S%z").astimezone(UTC), match.group("uniqueness_token")
+
+        naive_started_at = datetime.strptime(timestamp, "%Y%m%dT%H%M%S")
         local_started_at = naive_started_at.replace(tzinfo=self.local_timezone)
         return local_started_at.astimezone(UTC), match.group("uniqueness_token")
 

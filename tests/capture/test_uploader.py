@@ -250,10 +250,9 @@ def test_register_uploaded_chunk_updates_existing_row(session: Session) -> None:
         s3_bucket="ambient-memory",
         s3_key=key,
         checksum="sha256:old",
-        status="failed",
+        status="uploaded",
         started_at=started_at,
         ended_at=ended_at,
-        error_message="network error",
     )
     session.add(existing)
     session.commit()
@@ -277,6 +276,49 @@ def test_register_uploaded_chunk_updates_existing_row(session: Session) -> None:
     assert row.error_message is None
 
 
+@pytest.mark.parametrize(("status", "error_message"), [("processed", None), ("failed", "worker error")])
+def test_register_uploaded_chunk_preserves_terminal_status_for_existing_row(
+    session: Session,
+    status: str,
+    error_message: str | None,
+) -> None:
+    register_uploaded_chunk = load_register_uploaded_chunk()
+    started_at = datetime(2026, 4, 2, 9, 0, 0, tzinfo=UTC)
+    ended_at = started_at + timedelta(seconds=30)
+    uploaded_at = datetime(2026, 4, 2, 9, 5, 0, tzinfo=UTC)
+    key = "raw-audio/desk-a/2026/04/02/20260402T090000.000000Z.wav"
+
+    existing = AudioChunk(
+        source_id="desk-a",
+        s3_bucket="ambient-memory",
+        s3_key=key,
+        checksum="sha256:old",
+        status=status,
+        started_at=started_at,
+        ended_at=ended_at,
+        uploaded_at=uploaded_at,
+        error_message=error_message,
+    )
+    session.add(existing)
+    session.commit()
+
+    row = register_uploaded_chunk(
+        session,
+        source_id="desk-a",
+        s3_bucket="ambient-memory",
+        s3_key=key,
+        started_at=started_at,
+        ended_at=ended_at,
+        checksum="sha256:new",
+    )
+
+    assert row.id == existing.id
+    assert row.status == status
+    assert row.checksum == "sha256:old"
+    assert as_utc(row.uploaded_at) == uploaded_at
+    assert row.error_message == error_message
+
+
 def test_chunk_uploader_uploads_ready_chunks_and_updates_heartbeat(
     tmp_path: Path,
     session_factory: sessionmaker[Session],
@@ -285,7 +327,7 @@ def test_chunk_uploader_uploads_ready_chunks_and_updates_heartbeat(
     spool_module = load_spool_module()
     client = RecordingS3Client()
     spool = spool_module.LocalSpool(tmp_path / "spool", settle_seconds=0)
-    write_chunk(spool.root / "chunk-session-20260402T090000.wav")
+    write_chunk(spool.root / "chunk-session-20260402T090000-0400.wav")
 
     uploader = uploader_module.ChunkUploader(
         spool=spool,
@@ -397,4 +439,47 @@ def test_chunk_uploader_keeps_same_second_cross_run_chunks_distinct(
     assert [call["Key"] for call in client.put_calls] == [
         "raw-audio/desk-a/2026/04/02/20260402T130000.000000Z-session-a.wav",
         "raw-audio/desk-a/2026/04/02/20260402T130000.000000Z-session-b.wav",
+    ]
+
+
+def test_chunk_uploader_parses_offset_timestamps_across_dst_fallback(
+    tmp_path: Path,
+    session_factory: sessionmaker[Session],
+) -> None:
+    uploader_module = load_uploader_module()
+    spool_module = load_spool_module()
+    client = RecordingS3Client()
+    spool = spool_module.LocalSpool(tmp_path / "spool", settle_seconds=0)
+    write_chunk(spool.root / "chunk-session-20261101T013000-0400.wav")
+    write_chunk(spool.root / "chunk-session-20261101T013000-0500.wav")
+
+    uploader = uploader_module.ChunkUploader(
+        spool=spool,
+        s3_client=client,
+        session_factory=session_factory,
+        bucket="ambient-memory",
+        source_id="desk-a",
+        source_type="macbook",
+        device_owner="Dylan",
+        local_timezone=ZoneInfo("America/New_York"),
+    )
+
+    result = uploader.upload_ready()
+
+    session = session_factory()
+    try:
+        rows = session.scalars(select(AudioChunk).order_by(AudioChunk.started_at)).all()
+    finally:
+        session.close()
+
+    assert result.attempted == 2
+    assert result.uploaded == 2
+    assert result.failed == 0
+    assert [as_utc(row.started_at) for row in rows] == [
+        datetime(2026, 11, 1, 5, 30, 0, tzinfo=UTC),
+        datetime(2026, 11, 1, 6, 30, 0, tzinfo=UTC),
+    ]
+    assert [row.s3_key for row in rows] == [
+        "raw-audio/desk-a/2026/11/01/20261101T053000.000000Z-session.wav",
+        "raw-audio/desk-a/2026/11/01/20261101T063000.000000Z-session.wav",
     ]

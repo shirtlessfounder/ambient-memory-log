@@ -3,9 +3,8 @@ from __future__ import annotations
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import pool
 
-from ambient_memory.config import Settings
+from ambient_memory.config import DatabaseSettings
 from ambient_memory.db import build_engine
 from ambient_memory.models import Base
 
@@ -18,7 +17,7 @@ target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
-    settings = Settings()
+    settings = DatabaseSettings()
     context.configure(
         url=settings.database_url,
         target_metadata=target_metadata,
@@ -31,7 +30,7 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    settings = Settings()
+    settings = DatabaseSettings()
     engine = build_engine(settings).execution_options(isolation_level="AUTOCOMMIT")
 
     with engine.connect() as connection:

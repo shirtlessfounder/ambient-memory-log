@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from ambient_memory.config import WorkerSettings
+from ambient_memory.config import DatabaseSettings, WorkerSettings
 from ambient_memory.db import build_session_factory
 from ambient_memory.integrations.deepgram_client import DeepgramClient
 from ambient_memory.integrations.pyannote_client import IdentificationMatch, PyannoteClient, VoiceprintReference
@@ -27,12 +27,6 @@ LOGGER = logging.getLogger(__name__)
 UPLOADED_STATUS = "uploaded"
 PROCESSED_STATUS = "processed"
 FAILED_STATUS = "failed"
-
-
-@dataclass(frozen=True, slots=True)
-class DatabaseRuntimeSettings:
-    database_url: str
-    database_ssl_root_cert: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,7 +370,7 @@ def run_worker_once(*, dry_run: bool = False) -> WorkerRunResult:
     configure_logging()
     config = load_worker_runtime_config(dry_run=dry_run)
     session_factory = build_session_factory(
-        DatabaseRuntimeSettings(
+        DatabaseSettings(
             database_url=config.database_url,
             database_ssl_root_cert=config.database_ssl_root_cert,
         )
@@ -410,7 +404,7 @@ def build_worker(config: WorkerRuntimeConfig) -> PipelineWorker:
 
     return PipelineWorker(
         session_factory=build_session_factory(
-            DatabaseRuntimeSettings(
+            DatabaseSettings(
                 database_url=config.database_url,
                 database_ssl_root_cert=config.database_ssl_root_cert,
             )
