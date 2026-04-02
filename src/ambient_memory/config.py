@@ -18,6 +18,16 @@ class EnrollmentSettings(BaseSettings):
     model_config = COMMON_MODEL_CONFIG
 
 
+class WorkerSettings(BaseSettings):
+    database_url: str = Field(alias="DATABASE_URL")
+    database_ssl_root_cert: str | None = Field(default=None, alias="DATABASE_SSL_ROOT_CERT")
+    aws_region: str | None = Field(default=None, alias="AWS_REGION")
+    deepgram_api_key: str | None = Field(default=None, alias="DEEPGRAM_API_KEY")
+    pyannote_api_key: str | None = Field(default=None, alias="PYANNOTE_API_KEY")
+
+    model_config = COMMON_MODEL_CONFIG
+
+
 class Settings(EnrollmentSettings):
     aws_region: str = Field(alias="AWS_REGION")
     s3_bucket: str = Field(alias="S3_BUCKET")

@@ -194,16 +194,20 @@ def test_pipeline_worker_processes_one_window_and_persists_canonical_utterance(
             {
                 local_audio: [
                     IdentificationMatch(
-                        speaker="speaker_0",
+                        speaker="turn-A",
                         match="Dylan",
                         confidence={"Dylan": 0.82},
+                        start_seconds=0.8,
+                        end_seconds=3.2,
                     )
                 ],
                 room_audio: [
                     IdentificationMatch(
-                        speaker="speaker_0",
+                        speaker="speaker#room-17",
                         match="Dylan",
                         confidence={"Dylan": 0.74},
+                        start_seconds=1.0,
+                        end_seconds=3.3,
                     )
                 ],
             }
@@ -233,6 +237,77 @@ def test_pipeline_worker_processes_one_window_and_persists_canonical_utterance(
     assert canonical[0].speaker_name == "Dylan"
     assert len(provenance) == 2
     assert sum(row.is_canonical for row in provenance) == 1
+
+
+def test_pipeline_worker_matches_speakers_by_time_overlap_not_label_namespace(
+    session_factory: sessionmaker[Session],
+) -> None:
+    _seed_single_uploaded_chunk(session_factory)
+    session = session_factory()
+    try:
+        session.add(
+            Voiceprint(
+                speaker_label="Dylan",
+                provider="pyannote",
+                provider_voiceprint_id="vp-1",
+                source_audio_key="voiceprints/dylan.wav",
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    local_audio = b"local-audio"
+    worker = PipelineWorker(
+        session_factory=session_factory,
+        s3_client=FakeS3Client({"raw-audio/desk-a/chunk-local.wav": local_audio}),
+        deepgram_client=FakeDeepgramClient(
+            {
+                local_audio: {
+                    "results": {
+                        "utterances": [
+                            {
+                                "id": "utt-local",
+                                "start": 4.0,
+                                "end": 7.0,
+                                "confidence": 0.94,
+                                "speaker": 0,
+                                "speaker_confidence": 0.82,
+                                "transcript": "I am here.",
+                            }
+                        ]
+                    }
+                }
+            }
+        ),
+        pyannote_client=FakePyannoteClient(
+            {
+                local_audio: [
+                    IdentificationMatch(
+                        speaker="pyannote:alpha",
+                        match="Dylan",
+                        confidence={"Dylan": 0.88},
+                        start_seconds=4.2,
+                        end_seconds=6.8,
+                    )
+                ]
+            }
+        ),
+    )
+
+    result = worker.run_once()
+
+    session = session_factory()
+    try:
+        candidate = session.scalars(select(TranscriptCandidate)).one()
+        canonical = session.scalars(select(CanonicalUtterance)).one()
+    finally:
+        session.close()
+
+    assert result.processed_chunks == 1
+    assert candidate.speaker_hint == "speaker_0"
+    assert candidate.speaker_confidence == pytest.approx(0.98)
+    assert canonical.speaker_name == "Dylan"
 
 
 def test_pipeline_worker_run_once_dry_run_reports_pending_chunks_without_mutation(

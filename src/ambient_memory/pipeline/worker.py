@@ -3,14 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import logging
-import os
 from pathlib import Path
 from time import sleep
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from ambient_memory.config import WorkerSettings
 from ambient_memory.db import build_session_factory
 from ambient_memory.integrations.deepgram_client import DeepgramClient
 from ambient_memory.integrations.pyannote_client import IdentificationMatch, PyannoteClient, VoiceprintReference
@@ -182,7 +183,12 @@ class PipelineWorker:
                 )
 
                 for segment in normalized_segments:
-                    match = identified_speakers.get(segment.speaker_hint or "")
+                    match = self._match_identification_for_segment(
+                        matches=identified_speakers,
+                        segment_started_at=segment.started_at,
+                        segment_ended_at=segment.ended_at,
+                        chunk_started_at=chunk.started_at,
+                    )
                     speaker_name, speaker_confidence = self._resolve_speaker(
                         source_owner=chunk.source_owner,
                         match=match,
@@ -240,19 +246,19 @@ class PipelineWorker:
         audio_bytes: bytes,
         filename: str,
         voiceprints: list[VoiceprintReference],
-    ) -> dict[str, IdentificationMatch]:
+    ) -> list[IdentificationMatch]:
         if not voiceprints:
-            return {}
+            return []
 
-        return {
-            match.speaker: match
+        return [
+            match
             for match in self.pyannote_client.identify_speakers(
                 audio_bytes=audio_bytes,
                 filename=filename,
                 voiceprints=voiceprints,
             )
             if match.speaker
-        }
+        ]
 
     def _resolve_speaker(
         self,
@@ -270,6 +276,54 @@ class PipelineWorker:
             confidence=confidence,
         )
         return resolved.speaker_name, resolved.confidence
+
+    def _match_identification_for_segment(
+        self,
+        *,
+        matches: list[IdentificationMatch],
+        segment_started_at: datetime,
+        segment_ended_at: datetime,
+        chunk_started_at: datetime,
+    ) -> IdentificationMatch | None:
+        segment_start_seconds = max(0.0, (segment_started_at - chunk_started_at).total_seconds())
+        segment_end_seconds = max(segment_start_seconds, (segment_ended_at - chunk_started_at).total_seconds())
+        overlapping_matches = [
+            match
+            for match in matches
+            if _overlap_seconds(
+                segment_start=segment_start_seconds,
+                segment_end=segment_end_seconds,
+                match_start=match.start_seconds,
+                match_end=match.end_seconds,
+            )
+            > 0
+        ]
+        if overlapping_matches:
+            return max(
+                overlapping_matches,
+                key=lambda match: (
+                    _overlap_seconds(
+                        segment_start=segment_start_seconds,
+                        segment_end=segment_end_seconds,
+                        match_start=match.start_seconds,
+                        match_end=match.end_seconds,
+                    ),
+                    _match_confidence(match) or 0.0,
+                    -(match.start_seconds or 0.0),
+                    match.speaker,
+                    match.match or "",
+                ),
+            )
+
+        untimed_matches = [
+            match
+            for match in matches
+            if match.start_seconds is None or match.end_seconds is None
+        ]
+        if len(untimed_matches) == 1:
+            return untimed_matches[0]
+
+        return None
 
     def _load_audio_bytes(self, chunk: PendingChunk) -> bytes:
         response = self.s3_client.get_object(Bucket=chunk.s3_bucket, Key=chunk.s3_key)
@@ -368,29 +422,36 @@ def build_worker(config: WorkerRuntimeConfig) -> PipelineWorker:
 
 
 def load_worker_runtime_config(*, dry_run: bool) -> WorkerRuntimeConfig:
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        raise RuntimeError("missing required environment variables: DATABASE_URL")
+    try:
+        settings = WorkerSettings()
+    except ValidationError as exc:
+        missing_fields = sorted(
+            str(error["loc"][0])
+            for error in exc.errors()
+            if error.get("type") == "missing" and error.get("loc")
+        )
+        if missing_fields:
+            raise RuntimeError(f"missing required environment variables: {', '.join(missing_fields)}") from exc
+        raise
 
-    database_ssl_root_cert = os.getenv("DATABASE_SSL_ROOT_CERT")
     if dry_run:
         return WorkerRuntimeConfig(
-            database_url=database_url,
-            database_ssl_root_cert=database_ssl_root_cert,
+            database_url=settings.database_url,
+            database_ssl_root_cert=settings.database_ssl_root_cert,
         )
 
     required = {
-        "AWS_REGION": os.getenv("AWS_REGION"),
-        "DEEPGRAM_API_KEY": os.getenv("DEEPGRAM_API_KEY"),
-        "PYANNOTE_API_KEY": os.getenv("PYANNOTE_API_KEY"),
+        "AWS_REGION": settings.aws_region,
+        "DEEPGRAM_API_KEY": settings.deepgram_api_key,
+        "PYANNOTE_API_KEY": settings.pyannote_api_key,
     }
     missing = [name for name, value in required.items() if not value]
     if missing:
         raise RuntimeError(f"missing required environment variables: {', '.join(sorted(missing))}")
 
     return WorkerRuntimeConfig(
-        database_url=database_url,
-        database_ssl_root_cert=database_ssl_root_cert,
+        database_url=settings.database_url,
+        database_ssl_root_cert=settings.database_ssl_root_cert,
         aws_region=required["AWS_REGION"],
         deepgram_api_key=required["DEEPGRAM_API_KEY"],
         pyannote_api_key=required["PYANNOTE_API_KEY"],
@@ -412,6 +473,18 @@ def _match_confidence(match: IdentificationMatch) -> float | None:
     if match.confidence:
         return max(match.confidence.values())
     return None
+
+
+def _overlap_seconds(
+    *,
+    segment_start: float,
+    segment_end: float,
+    match_start: float | None,
+    match_end: float | None,
+) -> float:
+    if match_start is None or match_end is None:
+        return 0.0
+    return max(0.0, min(segment_end, match_end) - max(segment_start, match_start))
 
 
 def _normalize_timestamp(value: datetime) -> datetime:

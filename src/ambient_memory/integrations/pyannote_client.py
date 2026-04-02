@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 import time
 from dataclasses import dataclass
@@ -98,6 +99,8 @@ class IdentificationMatch:
     speaker: str
     match: str | None
     confidence: dict[str, float]
+    start_seconds: float | None = None
+    end_seconds: float | None = None
 
 
 class PyannoteClient:
@@ -173,11 +176,14 @@ class PyannoteClient:
                 str(speaker): float(score)
                 for speaker, score in dict(item.get("confidence") or {}).items()
             }
+            start_seconds, end_seconds = _parse_segment_bounds(item)
             matches.append(
                 IdentificationMatch(
                     speaker=str(item.get("speaker", "")),
                     match=item.get("match"),
                     confidence=confidence,
+                    start_seconds=start_seconds,
+                    end_seconds=end_seconds,
                 )
             )
 
@@ -228,3 +234,32 @@ def _sanitize_key(value: str) -> str:
 
     sanitized = "".join(allowed).strip("-")
     return sanitized or "audio"
+
+
+def _parse_segment_bounds(item: Mapping[str, Any]) -> tuple[float | None, float | None]:
+    for candidate in (item, item.get("segment"), item.get("turn")):
+        if not isinstance(candidate, Mapping):
+            continue
+
+        start_seconds = _coerce_float(
+            candidate.get("start_seconds", candidate.get("startTime", candidate.get("start")))
+        )
+        end_seconds = _coerce_float(
+            candidate.get("end_seconds", candidate.get("endTime", candidate.get("end")))
+        )
+        if start_seconds is not None and end_seconds is not None:
+            return start_seconds, end_seconds
+
+    return None, None
+
+
+def _coerce_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+
+    try:
+        return float(str(value))
+    except ValueError:
+        return None
