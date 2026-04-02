@@ -10,14 +10,13 @@ def test_build_capture_command_uses_selected_audio_input():
         spool_dir=Path("/tmp/ambient-spool"),
     )
 
-    assert command[:6] == [
+    assert command[:4] == [
         "ffmpeg",
         "-hide_banner",
         "-loglevel",
         "warning",
-        "-f",
-        "avfoundation",
     ]
+    assert command[command.index("-f") + 1] == "avfoundation"
     assert command[command.index("-i") + 1] == ":1"
 
 
@@ -25,11 +24,12 @@ def test_build_capture_command_sets_segment_duration():
     command = build_capture_command(
         device=AudioDevice(index="1", name="MacBook Pro Microphone"),
         spool_dir=Path("/tmp/ambient-spool"),
+        session_id="capture-session",
     )
 
     assert command[command.index("-segment_time") + 1] == "30"
     assert command[command.index("-strftime") + 1] == "1"
-    assert command[-1] == "/tmp/ambient-spool/chunk-%Y%m%dT%H%M%S.wav"
+    assert command[-1] == "/tmp/ambient-spool/chunk-capture-session-%Y%m%dT%H%M%S.wav"
 
 
 def test_build_capture_command_uses_stable_wav_settings():
@@ -49,6 +49,30 @@ def test_build_capture_command_writes_chunks_into_spool_dir():
     command = build_capture_command(
         device=AudioDevice(index="1", name="MacBook Pro Microphone"),
         spool_dir=spool_dir,
+        session_id="capture-session",
     )
 
-    assert command[-1] == str(spool_dir / "chunk-%Y%m%dT%H%M%S.wav")
+    assert command[-1] == str(spool_dir / "chunk-capture-session-%Y%m%dT%H%M%S.wav")
+
+
+def test_build_capture_command_uses_non_interactive_output_flags():
+    command = build_capture_command(
+        device=AudioDevice(index="1", name="MacBook Pro Microphone"),
+        spool_dir=Path("/tmp/ambient-spool"),
+    )
+
+    assert "-nostdin" in command
+    assert "-n" in command
+
+
+def test_build_capture_command_uses_unique_output_path_per_launch():
+    first_command = build_capture_command(
+        device=AudioDevice(index="1", name="MacBook Pro Microphone"),
+        spool_dir=Path("/tmp/ambient-spool"),
+    )
+    second_command = build_capture_command(
+        device=AudioDevice(index="1", name="MacBook Pro Microphone"),
+        spool_dir=Path("/tmp/ambient-spool"),
+    )
+
+    assert first_command[-1] != second_command[-1]
