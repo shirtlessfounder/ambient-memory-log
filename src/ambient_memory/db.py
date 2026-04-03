@@ -78,7 +78,7 @@ def register_uploaded_chunk(
             ended_at=ended_at,
         )
         session.add(row)
-    elif row.status != "uploaded":
+    elif row.status == "processed":
         return row
 
     row.source_id = source_id

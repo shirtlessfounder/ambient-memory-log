@@ -239,7 +239,7 @@ def test_register_uploaded_chunk_creates_uploaded_row(session: Session) -> None:
     assert stored.error_message is None
 
 
-def test_register_uploaded_chunk_updates_existing_row(session: Session) -> None:
+def test_register_uploaded_chunk_updates_existing_failed_row(session: Session) -> None:
     register_uploaded_chunk = load_register_uploaded_chunk()
     started_at = datetime(2026, 4, 2, 9, 0, 0, tzinfo=UTC)
     ended_at = started_at + timedelta(seconds=30)
@@ -250,9 +250,10 @@ def test_register_uploaded_chunk_updates_existing_row(session: Session) -> None:
         s3_bucket="ambient-memory",
         s3_key=key,
         checksum="sha256:old",
-        status="uploaded",
+        status="failed",
         started_at=started_at,
         ended_at=ended_at,
+        error_message="network error",
     )
     session.add(existing)
     session.commit()
@@ -276,12 +277,7 @@ def test_register_uploaded_chunk_updates_existing_row(session: Session) -> None:
     assert row.error_message is None
 
 
-@pytest.mark.parametrize(("status", "error_message"), [("processed", None), ("failed", "worker error")])
-def test_register_uploaded_chunk_preserves_terminal_status_for_existing_row(
-    session: Session,
-    status: str,
-    error_message: str | None,
-) -> None:
+def test_register_uploaded_chunk_preserves_processed_row(session: Session) -> None:
     register_uploaded_chunk = load_register_uploaded_chunk()
     started_at = datetime(2026, 4, 2, 9, 0, 0, tzinfo=UTC)
     ended_at = started_at + timedelta(seconds=30)
@@ -293,11 +289,10 @@ def test_register_uploaded_chunk_preserves_terminal_status_for_existing_row(
         s3_bucket="ambient-memory",
         s3_key=key,
         checksum="sha256:old",
-        status=status,
+        status="processed",
         started_at=started_at,
         ended_at=ended_at,
         uploaded_at=uploaded_at,
-        error_message=error_message,
     )
     session.add(existing)
     session.commit()
@@ -313,10 +308,10 @@ def test_register_uploaded_chunk_preserves_terminal_status_for_existing_row(
     )
 
     assert row.id == existing.id
-    assert row.status == status
+    assert row.status == "processed"
     assert row.checksum == "sha256:old"
     assert as_utc(row.uploaded_at) == uploaded_at
-    assert row.error_message == error_message
+    assert row.error_message is None
 
 
 def test_chunk_uploader_uploads_ready_chunks_and_updates_heartbeat(
