@@ -57,3 +57,9 @@ def test_capture_agent_launchd_template_references_wrapper_script() -> None:
     assert "start-capture-agent.sh" in text
     assert "<key>RunAtLoad</key>" in text
     assert "<key>KeepAlive</key>" in text
+
+
+def test_env_example_mentions_capture_device_name() -> None:
+    text = _read(".env.example")
+
+    assert "CAPTURE_DEVICE_NAME" in text
