@@ -23,7 +23,7 @@ class LocalSpool:
         root: Path | str,
         *,
         settle_seconds: int = 2,
-        max_backlog_files: int = 32,
+        max_backlog_files: int = 2048,
     ) -> None:
         self.root = Path(root)
         self.retry_dir = self.root / "retry"
@@ -39,12 +39,23 @@ class LocalSpool:
         current = (now or datetime.now(UTC)).timestamp()
         entries: list[SpoolEntry] = []
 
-        for candidate in sorted(self._audio_candidates(), key=lambda path: path.stat().st_mtime):
+        candidates = self._audio_candidates()
+        if self._retry_file_count() >= self.max_backlog_files:
+            candidates = [candidate for candidate in candidates if candidate.parent == self.retry_dir]
+
+        for candidate in sorted(candidates, key=lambda path: path.stat().st_mtime):
             if current - candidate.stat().st_mtime < self.settle_seconds:
                 continue
             entries.append(self._load_entry(candidate))
 
         return entries
+
+    def backlog_file_count(self) -> int:
+        self.ensure()
+        return len(self._audio_candidates())
+
+    def is_backlog_at_capacity(self) -> bool:
+        return self.backlog_file_count() >= self.max_backlog_files
 
     def mark_failed(self, entry: SpoolEntry, error_message: str) -> SpoolEntry:
         self.ensure()

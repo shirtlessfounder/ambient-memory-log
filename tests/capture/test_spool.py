@@ -84,3 +84,26 @@ def test_local_spool_raises_when_retry_backlog_is_full(tmp_path: Path) -> None:
         spool.mark_failed(spool_module.SpoolEntry(path=second_chunk), "still down")
 
     assert second_chunk.exists()
+
+
+def test_local_spool_counts_root_and_retry_chunks_toward_capacity(tmp_path: Path) -> None:
+    spool_module = load_spool_module()
+    spool = spool_module.LocalSpool(tmp_path, settle_seconds=0, max_backlog_files=2)
+
+    write_chunk(tmp_path / "chunk-session-20260402T090000.wav", age_seconds=10)
+    write_chunk(tmp_path / "retry" / "chunk-session-20260402T090030.wav", age_seconds=10)
+
+    assert spool.backlog_file_count() == 2
+    assert spool.is_backlog_at_capacity() is True
+
+
+def test_local_spool_defers_new_chunks_when_retry_backlog_is_full(tmp_path: Path) -> None:
+    spool_module = load_spool_module()
+    spool = spool_module.LocalSpool(tmp_path, settle_seconds=0, max_backlog_files=1)
+
+    retry_chunk = write_chunk(tmp_path / "retry" / "chunk-session-20260402T090000.wav", age_seconds=10)
+    write_chunk(tmp_path / "chunk-session-20260402T090030.wav", age_seconds=10)
+
+    entries = spool.iter_ready()
+
+    assert [entry.path for entry in entries] == [retry_chunk]

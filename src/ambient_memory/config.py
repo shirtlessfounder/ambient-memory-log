@@ -22,6 +22,7 @@ class CaptureSettings(BaseSettings):
     source_type: str = Field(default="macbook", alias="SOURCE_TYPE")
     device_owner: str | None = Field(default=None, alias="DEVICE_OWNER")
     spool_dir: str = Field(default="./spool", alias="SPOOL_DIR")
+    capture_max_backlog_files: int = Field(default=2048, alias="CAPTURE_MAX_BACKLOG_FILES")
     active_start_local: str = Field(default="09:00", alias="ACTIVE_START_LOCAL")
     active_end_local: str = Field(default="00:00", alias="ACTIVE_END_LOCAL")
     aws_region: str | None = Field(default=None, alias="AWS_REGION")

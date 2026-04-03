@@ -30,6 +30,7 @@ Set these values for the laptop:
 - `SOURCE_TYPE=macbook`
 - `DEVICE_OWNER` like `dylan`
 - `SPOOL_DIR` as an absolute path like `/Users/your-user/Projects/ambient-memory-log/spool/desk-a`
+- `CAPTURE_MAX_BACKLOG_FILES` if you need to override the default local backlog cap of `2048` chunks
 - `CAPTURE_DEVICE_NAME` from the exact device name reported by `ambient-memory list-devices`
 - shared values: `DATABASE_URL`, `DATABASE_SSL_ROOT_CERT`, `AWS_REGION`, `S3_BUCKET`
 
@@ -112,11 +113,14 @@ Stderr:
 tail -f /tmp/ambient-memory.capture-agent.stderr.log
 ```
 
+If the laptop stays offline long enough to hit the local backlog cap, the agent pauses capture, keeps retrying backlog uploads, and resumes capture automatically once the backlog drains below the cap.
+
 ## Common Mistakes
 
 - repo not cloned at `$HOME/Projects/ambient-memory-log`
 - `CAPTURE_DEVICE_NAME` does not exactly match `ambient-memory list-devices`
 - `.env` missing or incomplete
+- `CAPTURE_MAX_BACKLOG_FILES` set too low for the expected offline window
 - `SPOOL_DIR` is not an absolute path
 - `ffmpeg` missing from the machine
 - service loaded before the dry-run was validated

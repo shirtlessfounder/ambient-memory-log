@@ -10,8 +10,8 @@ from uuid import uuid4
 
 from ambient_memory.capture.device_discovery import AudioDevice, select_audio_device, parse_avfoundation_list
 from ambient_memory.capture.ffmpeg import DEFAULT_SEGMENT_SECONDS, build_capture_command
-from ambient_memory.capture.spool import LocalSpool
-from ambient_memory.capture.uploader import ChunkUploader
+from ambient_memory.capture.spool import LocalSpool, SpoolBacklogFullError
+from ambient_memory.capture.uploader import ChunkUploader, UploadBatchResult
 from ambient_memory.config import CaptureSettings, DatabaseSettings
 from ambient_memory.db import build_session_factory, record_agent_heartbeat
 from ambient_memory.logging import configure_logging
@@ -26,6 +26,7 @@ class AgentRuntimeConfig:
     source_type: str
     device_owner: str | None
     spool_dir: Path
+    max_backlog_files: int
     active_start_local: str
     active_end_local: str
     aws_region: str | None = None
@@ -54,6 +55,7 @@ class CaptureAgent:
         self.spool = uploader.spool
         self._process: subprocess.Popen[bytes] | None = None
         self._last_heartbeat_at: datetime | None = None
+        self._capture_paused_for_backlog = False
 
     def run(self) -> None:
         active_start = parse_local_time(self.config.active_start_local)
@@ -64,12 +66,13 @@ class CaptureAgent:
             while True:
                 now = datetime.now().astimezone()
                 if is_within_active_window(now=now.time(), start=active_start, end=active_end):
-                    self._ensure_capture_running()
-                    upload_result = self.uploader.upload_ready()
+                    self._sync_capture_state(active_window=True)
+                    upload_result = self._upload_ready()
+                    self._sync_capture_state(active_window=True)
                     self._maybe_heartbeat(uploaded=upload_result.uploaded > 0)
                 else:
-                    self._stop_capture()
-                    self.uploader.upload_ready()
+                    self._sync_capture_state(active_window=False)
+                    self._upload_ready()
                     self._maybe_heartbeat(uploaded=False)
 
                 sleep(self.poll_seconds)
@@ -111,6 +114,42 @@ class CaptureAgent:
                 self._process.wait(timeout=10)
 
         self._process = None
+
+    def _sync_capture_state(self, *, active_window: bool) -> None:
+        if not active_window:
+            self._stop_capture()
+            return
+
+        if self.spool.is_backlog_at_capacity():
+            self._pause_capture_for_backlog()
+            return
+
+        if self._capture_paused_for_backlog:
+            LOGGER.info(
+                "capture resumed after backlog drained below capacity (%s/%s files)",
+                self.spool.backlog_file_count(),
+                self.config.max_backlog_files,
+            )
+            self._capture_paused_for_backlog = False
+
+        self._ensure_capture_running()
+
+    def _pause_capture_for_backlog(self) -> None:
+        if not self._capture_paused_for_backlog:
+            LOGGER.warning(
+                "capture paused due to backlog pressure (%s/%s files); continuing backlog upload retries",
+                self.spool.backlog_file_count(),
+                self.config.max_backlog_files,
+            )
+            self._capture_paused_for_backlog = True
+        self._stop_capture()
+
+    def _upload_ready(self) -> UploadBatchResult:
+        try:
+            return self.uploader.upload_ready()
+        except SpoolBacklogFullError:
+            self._pause_capture_for_backlog()
+            return UploadBatchResult()
 
     def _maybe_heartbeat(self, *, uploaded: bool) -> None:
         now = datetime.now(UTC)
@@ -182,7 +221,7 @@ def run_capture_agent(
 ) -> None:
     configure_logging()
     config = load_runtime_config(dry_run=dry_run)
-    spool = LocalSpool(config.spool_dir)
+    spool = LocalSpool(config.spool_dir, max_backlog_files=config.max_backlog_files)
     spool.ensure()
     devices = list_local_audio_devices(ffmpeg_binary)
     device = choose_audio_device(devices, device_selection)
@@ -195,9 +234,11 @@ def run_capture_agent(
             config.active_start_local,
             config.active_end_local,
         )
+        LOGGER.info("dry-run backlog_cap=%s", config.max_backlog_files)
         print(f"device: {device.index}: {device.name}")
         print(f"spool: {config.spool_dir.resolve()}")
         print(f"active-window: {config.active_start_local} -> {config.active_end_local}")
+        print(f"backlog-cap: {config.max_backlog_files}")
         return
 
     if config.aws_region is None or config.s3_bucket is None or config.database_url is None:
@@ -246,6 +287,7 @@ def load_runtime_config(*, dry_run: bool) -> AgentRuntimeConfig:
     source_id = settings.source_id
     source_type = settings.source_type
     spool_dir = Path(settings.spool_dir)
+    max_backlog_files = settings.capture_max_backlog_files
     active_start_local = settings.active_start_local
     active_end_local = settings.active_end_local
     device_owner = settings.device_owner
@@ -256,6 +298,7 @@ def load_runtime_config(*, dry_run: bool) -> AgentRuntimeConfig:
             source_type=source_type,
             device_owner=device_owner,
             spool_dir=spool_dir,
+            max_backlog_files=max_backlog_files,
             active_start_local=active_start_local,
             active_end_local=active_end_local,
         )
@@ -274,6 +317,7 @@ def load_runtime_config(*, dry_run: bool) -> AgentRuntimeConfig:
         source_type=source_type,
         device_owner=device_owner,
         spool_dir=spool_dir,
+        max_backlog_files=max_backlog_files,
         active_start_local=active_start_local,
         active_end_local=active_end_local,
         aws_region=required["AWS_REGION"],
