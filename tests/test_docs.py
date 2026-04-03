@@ -74,3 +74,10 @@ def test_env_example_mentions_capture_device_name() -> None:
     text = _read(".env.example")
 
     assert "CAPTURE_DEVICE_NAME" in text
+
+
+def test_readme_links_operator_setup_and_capture_agent_template() -> None:
+    text = _read("README.md")
+
+    assert "docs/operator-setup.md" in text
+    assert "deploy/launchd/com.ambient-memory.capture-agent.plist" in text

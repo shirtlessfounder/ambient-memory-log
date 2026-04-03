@@ -20,6 +20,8 @@ Recall-first ambient memory log MVP.
 
 ## Ops
 
+- Operator setup: `docs/operator-setup.md`
 - Smoke test: `docs/ops/smoke-test.md`
+- Launchd capture-agent template: `deploy/launchd/com.ambient-memory.capture-agent.plist`
 - Launchd worker template: `deploy/launchd/com.ambient-memory.worker.plist`
 - Launchd API template: `deploy/launchd/com.ambient-memory.api.plist`
