@@ -40,3 +40,20 @@ def test_launchd_templates_exist_for_worker_and_api() -> None:
     assert "<key>EnvironmentVariables</key>" in api_text
     assert "ambient-memory" in api_text
     assert "api" in api_text
+
+
+def test_operator_setup_doc_mentions_env_launchctl_and_logs() -> None:
+    text = _read("docs/operator-setup.md").lower()
+
+    assert ".env" in text
+    assert "capture_device_name" in text
+    assert "launchctl" in text
+    assert "log" in text
+
+
+def test_capture_agent_launchd_template_references_wrapper_script() -> None:
+    text = _read("deploy/launchd/com.ambient-memory.capture-agent.plist")
+
+    assert "start-capture-agent.sh" in text
+    assert "<key>RunAtLoad</key>" in text
+    assert "<key>KeepAlive</key>" in text
