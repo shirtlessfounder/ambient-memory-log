@@ -30,7 +30,7 @@ Set these values for the laptop:
 - `SOURCE_TYPE=macbook`
 - `DEVICE_OWNER` like `dylan`
 - `SPOOL_DIR` as an absolute path like `/Users/your-user/Projects/ambient-memory-log/spool/desk-a`
-- `CAPTURE_MAX_BACKLOG_FILES` if you need to override the default local backlog cap of `2048` chunks
+- `CAPTURE_MAX_BACKLOG_FILES` if you need to override the default local backlog cap of `2048` chunks; this must be a positive integer
 - `CAPTURE_DEVICE_NAME` from the exact device name reported by `ambient-memory list-devices`
 - shared values: `DATABASE_URL`, `DATABASE_SSL_ROOT_CERT`, `AWS_REGION`, `S3_BUCKET`
 

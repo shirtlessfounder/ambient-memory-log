@@ -2,6 +2,9 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 
+from pydantic import ValidationError
+import pytest
+
 from ambient_memory.capture.agent import AgentRuntimeConfig, CaptureAgent, load_runtime_config
 from ambient_memory.capture.spool import SpoolBacklogFullError
 from ambient_memory.capture.uploader import UploadBatchResult
@@ -88,6 +91,42 @@ def test_load_runtime_config_non_dry_run_reads_required_settings_from_dotenv(tmp
     assert config.database_url == "postgresql://db.example/app"
     assert config.database_ssl_root_cert == "/tmp/rds.pem"
     assert config.max_backlog_files == 1024
+
+
+@pytest.mark.parametrize("raw_value", ["0", "-1"])
+def test_load_runtime_config_rejects_non_positive_backlog_capacity(
+    tmp_path: Path,
+    monkeypatch,
+    raw_value: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            (
+                "SOURCE_ID=desk-a",
+                "SOURCE_TYPE=macbook",
+                "DEVICE_OWNER=dylan",
+                "SPOOL_DIR=./spool/desk-a",
+                "ACTIVE_START_LOCAL=09:00",
+                "ACTIVE_END_LOCAL=00:00",
+                f"CAPTURE_MAX_BACKLOG_FILES={raw_value}",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _clear_agent_env(monkeypatch)
+
+    with pytest.raises(ValidationError) as exc_info:
+        load_runtime_config(dry_run=True)
+
+    errors = exc_info.value.errors(include_url=False)
+
+    assert len(errors) == 1
+    assert errors[0]["type"] == "greater_than"
+    assert errors[0]["loc"] == ("CAPTURE_MAX_BACKLOG_FILES",)
+    assert errors[0]["msg"] == "Input should be greater than 0"
+    assert errors[0]["ctx"] == {"gt": 0}
 
 
 class StubSpool:

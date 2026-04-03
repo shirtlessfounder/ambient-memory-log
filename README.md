@@ -9,7 +9,7 @@ Recall-first ambient memory log MVP.
 3. Copy `.env.example` to `.env` and fill in the required values.
 4. Apply the schema with `uv run alembic upgrade head`.
 
-`CAPTURE_MAX_BACKLOG_FILES` defaults to `2048` so the capture agent can tolerate a longer offline window before it pauses local capture and focuses on draining backlog uploads.
+`CAPTURE_MAX_BACKLOG_FILES` defaults to `2048` and must be a positive integer so the capture agent can tolerate a longer offline window before it pauses local capture and focuses on draining backlog uploads.
 
 ## Commands
 
