@@ -51,6 +51,17 @@ def test_operator_setup_doc_mentions_env_launchctl_and_logs() -> None:
     assert "log" in text
 
 
+def test_operator_setup_doc_covers_install_validation_and_service_flow() -> None:
+    text = _read("docs/operator-setup.md")
+
+    assert "uv sync" in text
+    assert "ffmpeg" in text
+    assert "ambient-memory list-devices" in text
+    assert "ambient-memory agent run --dry-run" in text
+    assert "launchctl bootstrap" in text
+    assert "launchctl bootout" in text
+
+
 def test_capture_agent_launchd_template_references_wrapper_script() -> None:
     text = _read("deploy/launchd/com.ambient-memory.capture-agent.plist")
 
