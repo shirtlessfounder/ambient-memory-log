@@ -1,6 +1,18 @@
-# Operator Setup
+# Teammate Setup
 
-Use this for each MacBook capture laptop.
+Use this on each teammate MacBook.
+
+Goal: get one laptop recording, chunking, and uploading in the background with the right mic and voiceprint.
+
+This doc is only for teammate laptops.
+
+It does not cover:
+
+- worker startup
+- API startup
+- database administration
+
+Those live in `docs/ops-machine-setup.md`.
 
 ## Prerequisites
 
@@ -17,14 +29,23 @@ uv sync
 
 ## 1. Create `.env`
 
-Start from the template:
+Create `.env` in the repo root:
 
 ```bash
 cd "$HOME/Projects/ambient-memory-log"
 cp .env.example .env
 ```
 
-Set these values for the laptop:
+Set these shared values:
+
+- `DATABASE_URL`
+- `DATABASE_SSL_ROOT_CERT`
+- `AWS_REGION`
+- `S3_BUCKET`
+- `DEEPGRAM_API_KEY`
+- `PYANNOTE_API_KEY`
+
+Set these laptop-specific values:
 
 - `SOURCE_ID` like `desk-a`
 - `SOURCE_TYPE=macbook`
@@ -32,8 +53,12 @@ Set these values for the laptop:
 - `SPOOL_DIR` as an absolute path like `/Users/your-user/Projects/ambient-memory-log/spool/desk-a`
 - `CAPTURE_MAX_BACKLOG_FILES` if you need to override the default local backlog cap of `2048` chunks; this must be a positive integer
 - `CAPTURE_DEVICE_NAME` from the exact device name reported by `ambient-memory list-devices`
-- shared values: `DATABASE_URL`, `DATABASE_SSL_ROOT_CERT`, `AWS_REGION`, `S3_BUCKET`
-- optional shared value: `IMPORT_SPOOL_DIR` if you want prerecorded imports written somewhere other than `./spool/imports`
+
+Optional shared value:
+
+- `IMPORT_SPOOL_DIR` if you want prerecorded imports written somewhere other than `./spool/imports`
+
+Teammates do not run the worker or API on their laptops.
 
 ## 2. Pick The Mic
 
@@ -48,7 +73,7 @@ Copy the exact built-in mic name into `CAPTURE_DEVICE_NAME` in `.env`.
 
 ## 3. Dry-Run The Agent
 
-Validate config and device selection before loading the background service:
+Validate the config before starting background capture:
 
 ```bash
 cd "$HOME/Projects/ambient-memory-log"
@@ -64,7 +89,7 @@ Expected result:
 
 If the dry-run only works with a different device string, update `CAPTURE_DEVICE_NAME` in `.env` to match exactly.
 
-## Voiceprint Enrollment
+## 4. Enroll Your Voiceprint
 
 Each teammate should enroll one clean solo sample before you depend on named speaker matching.
 
@@ -82,9 +107,11 @@ Notes:
 - re-running it for the same name replaces the active voiceprint even if the case changes, so `Dylan` and `dylan` map to the same person
 - saved samples go under `voiceprints/` and are ignored by git
 
-## 4. Install The LaunchAgent
+If you want the exact script to read, see `docs/ops/voiceprint-script.md`.
 
-The generic plist already knows how to start the wrapper script. Do not edit the plist.
+## 5. Start Recording In Background
+
+Load the background capture service once:
 
 ```bash
 mkdir -p "$HOME/Library/LaunchAgents"
@@ -95,7 +122,9 @@ launchctl bootstrap "gui/$(id -u)" \
 launchctl kickstart -k "gui/$(id -u)/com.ambient-memory.capture-agent"
 ```
 
-## 5. Stop Or Restart The Service
+After that, recording should start automatically on login.
+
+## 6. Stop Or Restart The Service
 
 Stop:
 
@@ -110,7 +139,7 @@ Restart after editing `.env`:
 launchctl kickstart -k "gui/$(id -u)/com.ambient-memory.capture-agent"
 ```
 
-## 6. Check Status
+## 7. Check Status
 
 ```bash
 launchctl print "gui/$(id -u)/com.ambient-memory.capture-agent"
@@ -118,7 +147,7 @@ launchctl print "gui/$(id -u)/com.ambient-memory.capture-agent"
 
 You should see the label `com.ambient-memory.capture-agent` and a running process.
 
-## 7. Check Logs
+## 8. Check Logs
 
 Stdout:
 
@@ -143,3 +172,9 @@ If the laptop stays offline long enough to hit the local backlog cap, the agent 
 - `SPOOL_DIR` is not an absolute path
 - `ffmpeg` missing from the machine
 - service loaded before the dry-run was validated
+
+## Related Docs
+
+- `docs/ops-machine-setup.md`
+- `docs/ops/voiceprint-script.md`
+- `docs/ops/smoke-test.md`

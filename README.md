@@ -7,7 +7,6 @@ Recall-first ambient memory log MVP.
 1. Install `ffmpeg` on macOS.
 2. Install project dependencies with `uv sync`.
 3. Copy `.env.example` to `.env` and fill in the required values.
-4. Apply the schema with `uv run alembic upgrade head`.
 
 `CAPTURE_MAX_BACKLOG_FILES` defaults to `2048` and must be a positive integer so the capture agent can tolerate a longer offline window before it pauses local capture and focuses on draining backlog uploads.
 
@@ -25,7 +24,8 @@ Recall-first ambient memory log MVP.
 
 ## Ops
 
-- Operator setup: `docs/operator-setup.md`
+- Teammate setup: `docs/teammate-setup.md`
+- Ops machine setup: `docs/ops-machine-setup.md`
 - Smoke test: `docs/ops/smoke-test.md`
 - Launchd capture-agent template: `deploy/launchd/com.ambient-memory.capture-agent.plist`
 - Launchd worker template: `deploy/launchd/com.ambient-memory.worker.plist`

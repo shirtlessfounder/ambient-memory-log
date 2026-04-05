@@ -42,8 +42,8 @@ def test_launchd_templates_exist_for_worker_and_api() -> None:
     assert "api" in api_text
 
 
-def test_operator_setup_doc_mentions_env_launchctl_and_logs() -> None:
-    text = _read("docs/operator-setup.md").lower()
+def test_teammate_setup_doc_mentions_env_launchctl_and_logs() -> None:
+    text = _read("docs/teammate-setup.md").lower()
 
     assert ".env" in text
     assert "capture_device_name" in text
@@ -51,15 +51,27 @@ def test_operator_setup_doc_mentions_env_launchctl_and_logs() -> None:
     assert "log" in text
 
 
-def test_operator_setup_doc_covers_install_validation_and_service_flow() -> None:
-    text = _read("docs/operator-setup.md")
+def test_teammate_setup_doc_covers_install_validation_voiceprint_and_service_flow() -> None:
+    text = _read("docs/teammate-setup.md")
 
     assert "uv sync" in text
     assert "ffmpeg" in text
     assert "ambient-memory list-devices" in text
     assert "ambient-memory agent run --dry-run" in text
+    assert "voiceprint-live" in text
     assert "launchctl bootstrap" in text
     assert "launchctl bootout" in text
+
+
+def test_ops_machine_setup_doc_covers_worker_api_and_optional_room_capture() -> None:
+    text = _read("docs/ops-machine-setup.md").lower()
+
+    assert ".env" in text
+    assert "worker" in text
+    assert "api" in text
+    assert "room" in text
+    assert "launchctl" in text
+    assert "smoke-test.md" in text
 
 
 def test_capture_agent_launchd_template_references_wrapper_script() -> None:
@@ -76,19 +88,28 @@ def test_env_example_mentions_capture_device_name() -> None:
     assert "CAPTURE_DEVICE_NAME" in text
 
 
-def test_readme_links_operator_setup_and_capture_agent_template() -> None:
+def test_readme_links_teammate_and_ops_machine_setup_docs() -> None:
     text = _read("README.md")
 
-    assert "docs/operator-setup.md" in text
+    assert "docs/teammate-setup.md" in text
+    assert "docs/ops-machine-setup.md" in text
     assert "deploy/launchd/com.ambient-memory.capture-agent.plist" in text
 
 
 def test_voiceprint_docs_exist_and_reference_live_enrollment() -> None:
-    operator_text = _read("docs/operator-setup.md")
+    teammate_text = _read("docs/teammate-setup.md")
     script_text = _read("docs/ops/voiceprint-script.md")
     readme_text = _read("README.md")
 
-    assert "voiceprint-live" in operator_text
+    assert "voiceprint-live" in teammate_text
     assert "quiet room" in script_text.lower()
     assert "ambient memory" in script_text.lower()
     assert "voiceprint-live" in readme_text
+
+
+def test_teammate_setup_doc_links_related_docs() -> None:
+    text = _read("docs/teammate-setup.md")
+
+    assert "docs/ops-machine-setup.md" in text
+    assert "docs/ops/voiceprint-script.md" in text
+    assert "docs/ops/smoke-test.md" in text
