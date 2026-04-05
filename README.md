@@ -15,10 +15,13 @@ Recall-first ambient memory log MVP.
 
 - `uv run ambient-memory list-devices`
 - `uv run ambient-memory agent run --dry-run --device "Built-in Microphone"`
+- `uv run ambient-memory import-recording ./meeting.m4a --start "2026-04-03 09:00"`
+  Re-running the same source id now prompts before append; use `--allow-existing-source-id` only for deliberate reruns.
 - `uv run ambient-memory worker run-once --dry-run`
 - `uv run ambient-memory worker run --poll-seconds 5`
 - `uv run ambient-memory api --host 127.0.0.1 --port 8000`
 - `uv run ambient-memory enroll voiceprint --label "Dylan" --audio ./sample.wav`
+- `uv run ambient-memory enroll voiceprint-live --label "Dylan"`
 
 ## Ops
 

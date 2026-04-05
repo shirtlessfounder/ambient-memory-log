@@ -39,6 +39,14 @@ class EnrollmentSettings(DatabaseSettings):
     model_config = COMMON_MODEL_CONFIG
 
 
+class ImportSettings(DatabaseSettings):
+    aws_region: str = Field(alias="AWS_REGION")
+    s3_bucket: str = Field(alias="S3_BUCKET")
+    import_spool_dir: str = Field(default="./spool/imports", alias="IMPORT_SPOOL_DIR")
+
+    model_config = COMMON_MODEL_CONFIG
+
+
 class WorkerSettings(DatabaseSettings):
     aws_region: str | None = Field(default=None, alias="AWS_REGION")
     deepgram_api_key: str | None = Field(default=None, alias="DEEPGRAM_API_KEY")

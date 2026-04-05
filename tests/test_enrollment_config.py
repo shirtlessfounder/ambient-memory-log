@@ -1,7 +1,8 @@
 from ambient_memory.config import EnrollmentSettings
 
 
-def test_enrollment_settings_only_require_database_and_pyannote(monkeypatch) -> None:
+def test_enrollment_settings_only_require_database_and_pyannote(monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://db.example/app")
     monkeypatch.setenv("PYANNOTE_API_KEY", "pyannote-secret")
     monkeypatch.delenv("DATABASE_SSL_ROOT_CERT", raising=False)
@@ -21,7 +22,8 @@ def test_enrollment_settings_only_require_database_and_pyannote(monkeypatch) -> 
     assert settings.database_ssl_root_cert is None
 
 
-def test_enrollment_settings_accept_optional_database_ssl_root_cert(monkeypatch) -> None:
+def test_enrollment_settings_accept_optional_database_ssl_root_cert(monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://db.example/app")
     monkeypatch.setenv("PYANNOTE_API_KEY", "pyannote-secret")
     monkeypatch.setenv("DATABASE_SSL_ROOT_CERT", "/tmp/rds-ca.pem")

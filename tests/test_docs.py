@@ -81,3 +81,14 @@ def test_readme_links_operator_setup_and_capture_agent_template() -> None:
 
     assert "docs/operator-setup.md" in text
     assert "deploy/launchd/com.ambient-memory.capture-agent.plist" in text
+
+
+def test_voiceprint_docs_exist_and_reference_live_enrollment() -> None:
+    operator_text = _read("docs/operator-setup.md")
+    script_text = _read("docs/ops/voiceprint-script.md")
+    readme_text = _read("README.md")
+
+    assert "voiceprint-live" in operator_text
+    assert "quiet room" in script_text.lower()
+    assert "ambient memory" in script_text.lower()
+    assert "voiceprint-live" in readme_text

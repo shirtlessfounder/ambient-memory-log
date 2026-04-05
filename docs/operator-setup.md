@@ -33,6 +33,7 @@ Set these values for the laptop:
 - `CAPTURE_MAX_BACKLOG_FILES` if you need to override the default local backlog cap of `2048` chunks; this must be a positive integer
 - `CAPTURE_DEVICE_NAME` from the exact device name reported by `ambient-memory list-devices`
 - shared values: `DATABASE_URL`, `DATABASE_SSL_ROOT_CERT`, `AWS_REGION`, `S3_BUCKET`
+- optional shared value: `IMPORT_SPOOL_DIR` if you want prerecorded imports written somewhere other than `./spool/imports`
 
 ## 2. Pick The Mic
 
@@ -62,6 +63,24 @@ Expected result:
 - active window is correct
 
 If the dry-run only works with a different device string, update `CAPTURE_DEVICE_NAME` in `.env` to match exactly.
+
+## Voiceprint Enrollment
+
+Each teammate should enroll one clean solo sample before you depend on named speaker matching.
+
+```bash
+cd "$HOME/Projects/ambient-memory-log"
+uv run ambient-memory enroll voiceprint-live --label "Dylan"
+```
+
+Notes:
+
+- the command auto-picks the preferred local mic unless you pass `--device`
+- it prints the exact script to read aloud
+- you press `Enter` to start recording and `Enter` again to stop
+- after each take, it lets you press `r` to re-record
+- re-running it for the same name replaces the active voiceprint even if the case changes, so `Dylan` and `dylan` map to the same person
+- saved samples go under `voiceprints/` and are ignored by git
 
 ## 4. Install The LaunchAgent
 
