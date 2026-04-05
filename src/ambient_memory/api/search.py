@@ -209,8 +209,11 @@ class SearchService:
                 for term in normalized_query.split():
                     stmt = stmt.where(CanonicalUtterance.text.ilike(f"%{term}%"))
 
-        if speaker:
-            stmt = stmt.where(CanonicalUtterance.speaker_name == speaker)
+        normalized_speaker = (speaker or "").strip()
+        if normalized_speaker:
+            stmt = stmt.where(
+                func.lower(func.trim(CanonicalUtterance.speaker_name)) == normalized_speaker.casefold()
+            )
         if from_at is not None:
             stmt = stmt.where(CanonicalUtterance.ended_at >= from_at)
         if to_at is not None:

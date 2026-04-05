@@ -124,6 +124,15 @@ def test_search_supports_speaker_and_time_filters(client: TestClient) -> None:
     assert body["items"][0]["speaker_name"] == "Alice"
 
 
+def test_search_speaker_filter_is_case_insensitive(client: TestClient) -> None:
+    response = client.get("/search", params={"speaker": "dylan"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["id"] for item in body["items"]] == ["utt-roadmap"]
+    assert body["items"][0]["speaker_name"] == "Dylan"
+
+
 def test_get_utterance_returns_detail_with_replay_audio_links(
     client: TestClient,
     s3_client: FakeS3Client,
@@ -228,8 +237,8 @@ def test_postgres_search_uses_search_vector_column_when_querying() -> None:
     compiled_stmt = stmt.compile(dialect=postgresql.dialect())
     compiled = str(compiled_stmt).lower()
 
-    assert "canonical_utterances.search_vector" in compiled
-    assert "coalesce(canonical_utterances.search_vector, to_tsvector" in compiled
+    assert "aa_canonical_utterances.search_vector" in compiled
+    assert "coalesce(aa_canonical_utterances.search_vector, to_tsvector" in compiled
     assert "websearch_to_tsquery" in compiled
     assert "roadmap plan" in compiled_stmt.params.values()
 
