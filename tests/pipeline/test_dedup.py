@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -37,6 +37,35 @@ def session() -> Session:
         yield session
     finally:
         session.close()
+
+
+def _at(seconds: float) -> datetime:
+    return datetime(2026, 4, 2, 13, 0, 0, tzinfo=UTC) + timedelta(seconds=seconds)
+
+
+def _candidate(
+    transcript_candidate_id: str,
+    *,
+    source_id: str,
+    text: str,
+    start_seconds: float,
+    end_seconds: float,
+    source_owner: str | None = None,
+    speaker_name: str | None = None,
+    speaker_confidence: float | None = 0.8,
+    confidence: float | None = 0.8,
+) -> DedupCandidate:
+    return DedupCandidate(
+        transcript_candidate_id=transcript_candidate_id,
+        source_id=source_id,
+        source_owner=source_owner,
+        text=text,
+        started_at=_at(start_seconds),
+        ended_at=_at(end_seconds),
+        speaker_name=speaker_name,
+        speaker_confidence=speaker_confidence,
+        confidence=confidence,
+    )
 
 
 def test_persist_canonical_utterances_prefers_stronger_local_source_candidate(session: Session) -> None:
@@ -139,3 +168,383 @@ def test_persist_canonical_utterances_prefers_stronger_local_source_candidate(se
     assert len(provenance) == 2
     assert {row.transcript_candidate_id for row in provenance} == {"candidate-local", "candidate-room"}
     assert sum(row.is_canonical for row in provenance) == 1
+
+
+def test_merge_transcript_candidates_merges_exact_normalized_text_within_five_seconds() -> None:
+    merged = merge_transcript_candidates(
+        [
+            _candidate(
+                "candidate-a",
+                source_id="desk-a",
+                source_owner="Dylan",
+                text="We should ship it.",
+                start_seconds=1.0,
+                end_seconds=3.0,
+                speaker_name="Dylan",
+                speaker_confidence=0.9,
+                confidence=0.94,
+            ),
+            _candidate(
+                "candidate-b",
+                source_id="room-1",
+                text="we should ship it",
+                start_seconds=7.0,
+                end_seconds=9.0,
+                confidence=0.84,
+            ),
+        ]
+    )
+
+    assert len(merged) == 1
+    assert merged[0].canonical_candidate_id == "candidate-a"
+    assert merged[0].transcript_candidate_ids == ("candidate-a", "candidate-b")
+
+
+def test_merge_transcript_candidates_does_not_merge_exact_text_for_conflicting_named_speakers() -> None:
+    merged = merge_transcript_candidates(
+        [
+            _candidate(
+                "candidate-a",
+                source_id="desk-a",
+                source_owner="Dylan",
+                text="We should ship it.",
+                start_seconds=1.0,
+                end_seconds=3.0,
+                speaker_name="Dylan",
+                speaker_confidence=0.9,
+                confidence=0.94,
+            ),
+            _candidate(
+                "candidate-b",
+                source_id="room-1",
+                text="we should ship it",
+                start_seconds=7.0,
+                end_seconds=9.0,
+                speaker_name="Alex",
+                speaker_confidence=0.86,
+                confidence=0.84,
+            ),
+        ]
+    )
+
+    assert len(merged) == 2
+
+
+def test_merge_transcript_candidates_does_not_bridge_conflicting_named_speakers_through_unnamed_candidate() -> None:
+    merged = merge_transcript_candidates(
+        [
+            _candidate(
+                "candidate-dylan",
+                source_id="desk-a",
+                source_owner="Dylan",
+                text="We should ship it.",
+                start_seconds=1.0,
+                end_seconds=3.0,
+                speaker_name="Dylan",
+                speaker_confidence=0.9,
+                confidence=0.94,
+            ),
+            _candidate(
+                "candidate-unnamed",
+                source_id="room-1",
+                text="we should ship it",
+                start_seconds=1.2,
+                end_seconds=3.2,
+                confidence=0.84,
+            ),
+            _candidate(
+                "candidate-alex",
+                source_id="room-2",
+                text="we should ship it",
+                start_seconds=1.4,
+                end_seconds=3.4,
+                speaker_name="Alex",
+                speaker_confidence=0.86,
+                confidence=0.85,
+            ),
+        ]
+    )
+
+    assert len(merged) == 2
+    assert merged[0].transcript_candidate_ids == ("candidate-dylan", "candidate-unnamed")
+    assert merged[1].transcript_candidate_ids == ("candidate-alex",)
+
+
+def test_merge_transcript_candidates_fuzzy_merges_cross_source_contained_fragment() -> None:
+    merged = merge_transcript_candidates(
+        [
+            _candidate(
+                "candidate-a",
+                source_id="desk-a",
+                source_owner="Dylan",
+                text="ship the migration after lunch",
+                start_seconds=1.0,
+                end_seconds=4.0,
+                speaker_name="Dylan",
+                speaker_confidence=0.92,
+                confidence=0.95,
+            ),
+            _candidate(
+                "candidate-b",
+                source_id="room-1",
+                text="I think we should ship the migration after lunch today",
+                start_seconds=2.0,
+                end_seconds=5.5,
+                speaker_name="Dylan",
+                speaker_confidence=0.75,
+                confidence=0.84,
+            ),
+        ]
+    )
+
+    assert len(merged) == 1
+    assert merged[0].transcript_candidate_ids == ("candidate-a", "candidate-b")
+
+
+def test_merge_transcript_candidates_does_not_merge_same_time_different_content() -> None:
+    merged = merge_transcript_candidates(
+        [
+            _candidate(
+                "candidate-a",
+                source_id="desk-a",
+                text="We should ship the migration after lunch.",
+                start_seconds=1.0,
+                end_seconds=4.0,
+                source_owner="Dylan",
+                speaker_name="Dylan",
+            ),
+            _candidate(
+                "candidate-b",
+                source_id="room-1",
+                text="We should postpone the migration until next week.",
+                start_seconds=1.5,
+                end_seconds=4.5,
+                speaker_name="Dylan",
+            ),
+        ]
+    )
+
+    assert len(merged) == 2
+
+
+def test_merge_transcript_candidates_does_not_merge_same_source_exact_repeat_within_five_seconds() -> None:
+    merged = merge_transcript_candidates(
+        [
+            _candidate(
+                "candidate-a",
+                source_id="desk-a",
+                source_owner="Dylan",
+                text="We should ship it.",
+                start_seconds=1.0,
+                end_seconds=3.0,
+                speaker_name="Dylan",
+                speaker_confidence=0.9,
+                confidence=0.94,
+            ),
+            _candidate(
+                "candidate-b",
+                source_id="desk-a",
+                source_owner="Dylan",
+                text="we should ship it",
+                start_seconds=7.0,
+                end_seconds=9.0,
+                speaker_name="Dylan",
+                speaker_confidence=0.88,
+                confidence=0.9,
+            ),
+        ]
+    )
+
+    assert len(merged) == 2
+
+
+def test_merge_transcript_candidates_does_not_fuzzy_merge_negated_variant() -> None:
+    merged = merge_transcript_candidates(
+        [
+            _candidate(
+                "candidate-a",
+                source_id="desk-a",
+                text="we should ship the migration after lunch",
+                start_seconds=1.0,
+                end_seconds=4.0,
+                source_owner="Dylan",
+                speaker_name="Dylan",
+            ),
+            _candidate(
+                "candidate-b",
+                source_id="room-1",
+                text="we should not ship the migration after lunch",
+                start_seconds=1.5,
+                end_seconds=4.5,
+                speaker_name="Dylan",
+            ),
+        ]
+    )
+
+    assert len(merged) == 2
+
+
+def test_merge_transcript_candidates_does_not_fuzzy_merge_contraction_negation_variant() -> None:
+    merged = merge_transcript_candidates(
+        [
+            _candidate(
+                "candidate-a",
+                source_id="desk-a",
+                text="I can approve the deploy",
+                start_seconds=1.0,
+                end_seconds=4.0,
+                source_owner="Dylan",
+                speaker_name="Dylan",
+            ),
+            _candidate(
+                "candidate-b",
+                source_id="room-1",
+                text="I can't approve the deploy",
+                start_seconds=1.5,
+                end_seconds=4.5,
+                speaker_name="Dylan",
+            ),
+        ]
+    )
+
+    assert len(merged) == 2
+
+
+def test_merge_transcript_candidates_does_not_fuzzy_merge_key_token_replacement() -> None:
+    merged = merge_transcript_candidates(
+        [
+            _candidate(
+                "candidate-a",
+                source_id="desk-a",
+                text="we should ship the migration after lunch because finance approved it",
+                start_seconds=1.0,
+                end_seconds=4.0,
+                source_owner="Dylan",
+                speaker_name="Dylan",
+            ),
+            _candidate(
+                "candidate-b",
+                source_id="room-1",
+                text="we should delay the migration after lunch because finance approved it",
+                start_seconds=1.5,
+                end_seconds=4.5,
+                speaker_name="Dylan",
+            ),
+        ]
+    )
+
+    assert len(merged) == 2
+
+
+def test_merge_transcript_candidates_does_not_fuzzy_merge_possessive_pronoun_variant() -> None:
+    merged = merge_transcript_candidates(
+        [
+            _candidate(
+                "candidate-a",
+                source_id="desk-a",
+                text="my deployment is broken again today",
+                start_seconds=1.0,
+                end_seconds=4.0,
+                source_owner="Dylan",
+                speaker_name="Dylan",
+            ),
+            _candidate(
+                "candidate-b",
+                source_id="room-1",
+                text="your deployment is broken again today",
+                start_seconds=1.5,
+                end_seconds=4.5,
+                speaker_name="Dylan",
+            ),
+        ]
+    )
+
+    assert len(merged) == 2
+
+
+def test_merge_transcript_candidates_does_not_over_merge_low_signal_acknowledgements() -> None:
+    merged = merge_transcript_candidates(
+        [
+            _candidate(
+                "candidate-a",
+                source_id="desk-a",
+                text="Yeah.",
+                start_seconds=1.0,
+                end_seconds=1.5,
+                source_owner="Dylan",
+                speaker_name="Dylan",
+            ),
+            _candidate(
+                "candidate-b",
+                source_id="room-1",
+                text="yeah",
+                start_seconds=5.0,
+                end_seconds=5.5,
+            ),
+        ]
+    )
+
+    assert len(merged) == 2
+
+
+def test_merge_transcript_candidates_blocks_fuzzy_merge_for_conflicting_named_speakers() -> None:
+    merged = merge_transcript_candidates(
+        [
+            _candidate(
+                "candidate-a",
+                source_id="desk-a",
+                source_owner="Dylan",
+                text="ship the migration after lunch",
+                start_seconds=1.0,
+                end_seconds=4.0,
+                speaker_name="Dylan",
+                speaker_confidence=0.9,
+                confidence=0.95,
+            ),
+            _candidate(
+                "candidate-b",
+                source_id="room-1",
+                text="I think we should ship the migration after lunch today",
+                start_seconds=2.0,
+                end_seconds=5.0,
+                speaker_name="Alex",
+                speaker_confidence=0.86,
+                confidence=0.85,
+            ),
+        ]
+    )
+
+    assert len(merged) == 2
+
+
+def test_merge_transcript_candidates_keeps_canonical_candidate_preference_for_fuzzy_merge() -> None:
+    merged = merge_transcript_candidates(
+        [
+            _candidate(
+                "candidate-a",
+                source_id="desk-a",
+                source_owner="Dylan",
+                text="ship the migration after lunch",
+                start_seconds=1.0,
+                end_seconds=4.0,
+                speaker_name="Dylan",
+                speaker_confidence=0.92,
+                confidence=0.95,
+            ),
+            _candidate(
+                "candidate-b",
+                source_id="room-1",
+                text="I think we should ship the migration after lunch today",
+                start_seconds=2.0,
+                end_seconds=5.5,
+                speaker_name="Dylan",
+                speaker_confidence=0.7,
+                confidence=0.84,
+            ),
+        ]
+    )
+
+    assert len(merged) == 1
+    assert merged[0].canonical_candidate_id == "candidate-a"
+    assert merged[0].canonical_source_id == "desk-a"
+    assert merged[0].text == "ship the migration after lunch"
