@@ -17,7 +17,7 @@ class Base(DeclarativeBase):
 
 
 class Source(Base):
-    __tablename__ = "sources"
+    __tablename__ = "aa_sources"
 
     id: Mapped[str] = mapped_column(String(100), primary_key=True)
     source_type: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -35,10 +35,10 @@ class Source(Base):
 
 
 class AudioChunk(Base):
-    __tablename__ = "audio_chunks"
+    __tablename__ = "aa_audio_chunks"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    source_id: Mapped[str] = mapped_column(ForeignKey("sources.id"), nullable=False)
+    source_id: Mapped[str] = mapped_column(ForeignKey("aa_sources.id"), nullable=False)
     s3_bucket: Mapped[str] = mapped_column(String(255), nullable=False)
     s3_key: Mapped[str] = mapped_column(String(1024), nullable=False)
     checksum: Mapped[str | None] = mapped_column(String(128))
@@ -53,22 +53,22 @@ class AudioChunk(Base):
 
 
 class Voiceprint(Base):
-    __tablename__ = "voiceprints"
+    __tablename__ = "aa_voiceprints"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     speaker_label: Mapped[str] = mapped_column(String(100), nullable=False)
     provider: Mapped[str] = mapped_column(String(50), default="pyannote", nullable=False)
-    provider_voiceprint_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider_voiceprint_id: Mapped[str] = mapped_column(Text, nullable=False)
     source_audio_key: Mapped[str | None] = mapped_column(String(1024))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class TranscriptCandidate(Base):
-    __tablename__ = "transcript_candidates"
+    __tablename__ = "aa_transcript_candidates"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    audio_chunk_id: Mapped[str] = mapped_column(ForeignKey("audio_chunks.id"), nullable=False)
-    source_id: Mapped[str] = mapped_column(ForeignKey("sources.id"), nullable=False)
+    audio_chunk_id: Mapped[str] = mapped_column(ForeignKey("aa_audio_chunks.id"), nullable=False)
+    source_id: Mapped[str] = mapped_column(ForeignKey("aa_sources.id"), nullable=False)
     vendor: Mapped[str] = mapped_column(String(50), nullable=False)
     vendor_segment_id: Mapped[str | None] = mapped_column(String(255))
     text: Mapped[str] = mapped_column(Text, nullable=False)
@@ -84,7 +84,7 @@ class TranscriptCandidate(Base):
 
 
 class CanonicalUtterance(Base):
-    __tablename__ = "canonical_utterances"
+    __tablename__ = "aa_canonical_utterances"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     text: Mapped[str] = mapped_column(Text, nullable=False)
@@ -92,7 +92,7 @@ class CanonicalUtterance(Base):
     ended_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     speaker_name: Mapped[str | None] = mapped_column(String(100))
     speaker_confidence: Mapped[float | None] = mapped_column(Float)
-    canonical_source_id: Mapped[str | None] = mapped_column(ForeignKey("sources.id"))
+    canonical_source_id: Mapped[str | None] = mapped_column(ForeignKey("aa_sources.id"))
     processing_version: Mapped[str] = mapped_column(String(50), default="v1", nullable=False)
     search_vector: Mapped[str | None] = mapped_column(TSVECTOR)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -101,14 +101,14 @@ class CanonicalUtterance(Base):
 
 
 class UtteranceSource(Base):
-    __tablename__ = "utterance_sources"
+    __tablename__ = "aa_utterance_sources"
 
     canonical_utterance_id: Mapped[str] = mapped_column(
-        ForeignKey("canonical_utterances.id"),
+        ForeignKey("aa_canonical_utterances.id"),
         primary_key=True,
     )
     transcript_candidate_id: Mapped[str] = mapped_column(
-        ForeignKey("transcript_candidates.id"),
+        ForeignKey("aa_transcript_candidates.id"),
         primary_key=True,
     )
     is_canonical: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -118,9 +118,9 @@ class UtteranceSource(Base):
 
 
 class AgentHeartbeat(Base):
-    __tablename__ = "agent_heartbeats"
+    __tablename__ = "aa_agent_heartbeats"
 
-    source_id: Mapped[str] = mapped_column(ForeignKey("sources.id"), primary_key=True)
+    source_id: Mapped[str] = mapped_column(ForeignKey("aa_sources.id"), primary_key=True)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     last_upload_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(

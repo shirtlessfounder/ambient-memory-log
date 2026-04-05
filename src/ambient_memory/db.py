@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -120,6 +120,15 @@ def upsert_source(
     return row
 
 
+def count_audio_chunks_for_source(session: Session, *, source_id: str) -> int:
+    count = session.scalar(
+        select(func.count())
+        .select_from(AudioChunk)
+        .where(AudioChunk.source_id == source_id)
+    )
+    return int(count or 0)
+
+
 def record_agent_heartbeat(
     session: Session,
     *,
@@ -167,3 +176,39 @@ def create_voiceprint(
     session.add(row)
     session.flush()
     return row
+
+
+def normalize_speaker_label(label: str) -> str:
+    return label.strip().casefold()
+
+
+def upsert_voiceprint(
+    session: Session,
+    *,
+    speaker_label: str,
+    provider_voiceprint_id: str,
+    source_audio_key: str | None = None,
+    provider: str = "pyannote",
+) -> tuple[Voiceprint, bool]:
+    normalized_label = normalize_speaker_label(speaker_label)
+    matching_rows = session.scalars(
+        select(Voiceprint)
+        .where(func.lower(func.trim(Voiceprint.speaker_label)) == normalized_label)
+        .order_by(Voiceprint.created_at.desc(), Voiceprint.id.desc())
+    ).all()
+
+    replaced_existing = bool(matching_rows)
+    row = matching_rows[0] if matching_rows else Voiceprint()
+    if not replaced_existing:
+        session.add(row)
+
+    row.speaker_label = speaker_label.strip()
+    row.provider = provider
+    row.provider_voiceprint_id = provider_voiceprint_id
+    row.source_audio_key = source_audio_key
+
+    for duplicate in matching_rows[1:]:
+        session.delete(duplicate)
+
+    session.flush()
+    return row, replaced_existing

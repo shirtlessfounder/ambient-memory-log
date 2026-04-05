@@ -60,11 +60,11 @@ Operator notes:
 
 ## 4. Confirm The Chunk Upload Row In Postgres
 
-Check the most recent `audio_chunks` rows before you run the worker.
+Check the most recent `aa_audio_chunks` rows before you run the worker.
 
 ```bash
 psql "$DATABASE_URL" \
-  -c "select id, source_id, status, s3_key, started_at, uploaded_at from audio_chunks order by uploaded_at desc limit 5;"
+  -c "select id, source_id, status, s3_key, started_at, uploaded_at from aa_audio_chunks order by uploaded_at desc limit 5;"
 ```
 
 Expected result: the newest row matches `SOURCE_ID=desk-a`, the `s3_key` points at the new chunk, and `status` is `uploaded`.
