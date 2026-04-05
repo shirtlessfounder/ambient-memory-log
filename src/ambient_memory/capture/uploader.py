@@ -4,8 +4,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
 from hashlib import sha256
+import logging
 from pathlib import Path
 import re
+import subprocess
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.orm import Session
@@ -18,6 +20,10 @@ from ambient_memory.integrations.s3_store import upload_chunk
 CHUNK_FILENAME_PATTERN = re.compile(
     r"^chunk-(?:(?P<uniqueness_token>.+)-)?(?P<timestamp>\d{8}T\d{6}(?:[+-]\d{4})?)\.(?P<extension>[^.]+)$"
 )
+MAX_VOLUME_PATTERN = re.compile(r"max_volume:\s*(?P<value>-?(?:inf|\d+(?:\.\d+)?))\s*dB", re.IGNORECASE)
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +45,9 @@ class ChunkUploader:
         source_type: str,
         device_owner: str | None = None,
         segment_seconds: int = 30,
+        silence_filter_enabled: bool = False,
+        silence_max_volume_db: float = -45.0,
+        measure_max_volume_db: Callable[[Path], float] | None = None,
         local_timezone: tzinfo | None = None,
     ) -> None:
         self.spool = spool
@@ -49,6 +58,9 @@ class ChunkUploader:
         self.source_type = source_type
         self.device_owner = device_owner
         self.segment_seconds = segment_seconds
+        self.silence_filter_enabled = silence_filter_enabled
+        self.silence_max_volume_db = silence_max_volume_db
+        self.measure_max_volume_db = measure_max_volume_db or _measure_max_volume_db
         self.local_timezone = local_timezone or _load_local_timezone()
 
     def upload_ready(self, *, now: datetime | None = None) -> UploadBatchResult:
@@ -61,14 +73,18 @@ class ChunkUploader:
             if not self._entry_ready_for_upload(entry, now=current_time):
                 continue
             attempted += 1
-            if self._upload_entry(entry):
+            outcome = self._upload_entry(entry)
+            if outcome is True:
                 uploaded += 1
-            else:
+            elif outcome is False:
                 failed += 1
 
         return UploadBatchResult(attempted=attempted, uploaded=uploaded, failed=failed)
 
-    def _upload_entry(self, entry: SpoolEntry) -> bool:
+    def _upload_entry(self, entry: SpoolEntry) -> bool | None:
+        if self._skip_silent_entry(entry):
+            return None
+
         now = datetime.now(UTC)
         started_at, uniqueness_token = self._parse_chunk_file(entry.path)
         ended_at = started_at + timedelta(seconds=self.segment_seconds)
@@ -121,6 +137,34 @@ class ChunkUploader:
         except Exception as exc:
             self.spool.mark_failed(entry, str(exc))
             return False
+
+    def _skip_silent_entry(self, entry: SpoolEntry) -> bool:
+        if not self.silence_filter_enabled:
+            return False
+
+        try:
+            max_volume_db = self.measure_max_volume_db(entry.path)
+        except Exception as exc:
+            LOGGER.warning(
+                "silence analysis failed source_id=%s filename=%s error=%s",
+                self.source_id,
+                entry.path.name,
+                exc,
+            )
+            return False
+
+        if max_volume_db > self.silence_max_volume_db:
+            return False
+
+        LOGGER.info(
+            "skipping silent chunk source_id=%s filename=%s max_volume_db=%s threshold_db=%s",
+            self.source_id,
+            entry.path.name,
+            max_volume_db,
+            self.silence_max_volume_db,
+        )
+        self.spool.mark_uploaded(entry)
+        return True
 
     def _metadata(self) -> dict[str, str]:
         metadata = {
@@ -179,3 +223,36 @@ def _load_local_timezone() -> tzinfo:
                 pass
 
     return datetime.now().astimezone().tzinfo or UTC
+
+
+def _measure_max_volume_db(path: Path, *, ffmpeg_binary: str = "ffmpeg") -> float:
+    result = subprocess.run(
+        [
+            ffmpeg_binary,
+            "-hide_banner",
+            "-nostdin",
+            "-i",
+            str(path),
+            "-vn",
+            "-sn",
+            "-dn",
+            "-af",
+            "volumedetect",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
+    if result.returncode != 0:
+        detail = output or f"return code {result.returncode}"
+        raise RuntimeError(f"ffmpeg volume analysis failed for {path.name}: {detail}")
+
+    match = MAX_VOLUME_PATTERN.search(output)
+    if match is None:
+        raise RuntimeError(f"ffmpeg volume analysis did not report max_volume for {path.name}")
+
+    return float(match.group("value").lower())

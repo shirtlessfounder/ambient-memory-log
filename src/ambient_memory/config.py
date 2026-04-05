@@ -36,6 +36,8 @@ class CaptureSettings(BaseSettings):
     spool_dir: str = Field(default="./spool", alias="SPOOL_DIR")
     capture_device_name: str | None = Field(default=None, alias="CAPTURE_DEVICE_NAME")
     capture_max_backlog_files: int = Field(default=2048, alias="CAPTURE_MAX_BACKLOG_FILES", gt=0)
+    silence_filter_enabled: bool = Field(default=True, alias="SILENCE_FILTER_ENABLED")
+    silence_max_volume_db: float = Field(default=-45.0, alias="SILENCE_MAX_VOLUME_DB")
     active_start_local: str = Field(default="09:00", alias="ACTIVE_START_LOCAL")
     active_end_local: str = Field(default="00:00", alias="ACTIVE_END_LOCAL")
     aws_region: str | None = Field(default=None, alias="AWS_REGION")

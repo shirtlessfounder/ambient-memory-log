@@ -22,6 +22,44 @@ def test_capture_settings_default_backlog_capacity_is_larger_than_legacy_default
     assert settings.capture_max_backlog_files == 2048
 
 
+def test_capture_settings_enable_conservative_silence_filter_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SILENCE_FILTER_ENABLED", raising=False)
+    monkeypatch.delenv("SILENCE_MAX_VOLUME_DB", raising=False)
+
+    settings = CaptureSettings()
+
+    assert settings.silence_filter_enabled is True
+    assert settings.silence_max_volume_db == -45.0
+
+
+def test_capture_settings_read_silence_filter_settings_from_dotenv(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SILENCE_FILTER_ENABLED", raising=False)
+    monkeypatch.delenv("SILENCE_MAX_VOLUME_DB", raising=False)
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            (
+                "SILENCE_FILTER_ENABLED=false",
+                "SILENCE_MAX_VOLUME_DB=-52.5",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    settings = CaptureSettings()
+
+    assert settings.silence_filter_enabled is False
+    assert settings.silence_max_volume_db == -52.5
+
+
 @pytest.mark.parametrize("raw_value", ["0", "-1"])
 def test_capture_settings_rejects_non_positive_backlog_capacity(
     monkeypatch: pytest.MonkeyPatch,

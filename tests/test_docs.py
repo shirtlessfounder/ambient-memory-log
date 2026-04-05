@@ -110,6 +110,13 @@ def test_env_example_mentions_capture_device_name() -> None:
     assert "CAPTURE_DEVICE_NAME" in text
 
 
+def test_env_example_mentions_silence_filter_settings() -> None:
+    text = _read(".env.example")
+
+    assert "SILENCE_FILTER_ENABLED" in text
+    assert "SILENCE_MAX_VOLUME_DB" in text
+
+
 def test_readme_links_teammate_and_ops_machine_setup_docs() -> None:
     text = _read("README.md")
 
@@ -149,3 +156,19 @@ def test_teammate_setup_doc_links_related_docs() -> None:
     assert "docs/ops-machine-setup.md" in text
     assert "docs/ops/voiceprint-script.md" in text
     assert "docs/ops/smoke-test.md" in text
+
+
+def test_teammate_setup_doc_mentions_conservative_silence_filter_behavior() -> None:
+    text = _read("docs/teammate-setup.md").lower()
+
+    assert "silent chunk" in text
+    assert "conservative" in text
+    assert "quiet speech" in text
+
+
+def test_ops_machine_setup_doc_mentions_conservative_silence_filter_behavior() -> None:
+    text = _read("docs/ops-machine-setup.md").lower()
+
+    assert "silent chunk" in text
+    assert "conservative" in text
+    assert "quiet speech" in text

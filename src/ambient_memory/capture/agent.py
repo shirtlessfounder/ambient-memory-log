@@ -30,6 +30,8 @@ class AgentRuntimeConfig:
     max_backlog_files: int
     active_start_local: str
     active_end_local: str
+    silence_filter_enabled: bool = True
+    silence_max_volume_db: float = -45.0
     aws_region: str | None = None
     s3_bucket: str | None = None
     database_url: str | None = None
@@ -262,6 +264,8 @@ def run_capture_agent(
         source_type=config.source_type,
         device_owner=config.device_owner,
         segment_seconds=DEFAULT_SEGMENT_SECONDS,
+        silence_filter_enabled=config.silence_filter_enabled,
+        silence_max_volume_db=config.silence_max_volume_db,
     )
     agent = CaptureAgent(
         config=config,
@@ -291,6 +295,8 @@ def load_runtime_config(*, dry_run: bool, env_file: str | None = None) -> AgentR
     spool_dir = Path(settings.spool_dir)
     capture_device_name = settings.capture_device_name
     max_backlog_files = settings.capture_max_backlog_files
+    silence_filter_enabled = settings.silence_filter_enabled
+    silence_max_volume_db = settings.silence_max_volume_db
     active_start_local = settings.active_start_local
     active_end_local = settings.active_end_local
     device_owner = settings.device_owner
@@ -305,6 +311,8 @@ def load_runtime_config(*, dry_run: bool, env_file: str | None = None) -> AgentR
             max_backlog_files=max_backlog_files,
             active_start_local=active_start_local,
             active_end_local=active_end_local,
+            silence_filter_enabled=silence_filter_enabled,
+            silence_max_volume_db=silence_max_volume_db,
         )
 
     required = {
@@ -325,6 +333,8 @@ def load_runtime_config(*, dry_run: bool, env_file: str | None = None) -> AgentR
         max_backlog_files=max_backlog_files,
         active_start_local=active_start_local,
         active_end_local=active_end_local,
+        silence_filter_enabled=silence_filter_enabled,
+        silence_max_volume_db=silence_max_volume_db,
         aws_region=required["AWS_REGION"],
         s3_bucket=required["S3_BUCKET"],
         database_url=required["DATABASE_URL"],

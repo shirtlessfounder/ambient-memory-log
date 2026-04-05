@@ -82,6 +82,8 @@ Optional:
 - `API_PORT`
 - `API_PRESIGN_EXPIRES_IN`
 - `CAPTURE_MAX_BACKLOG_FILES`
+- `SILENCE_FILTER_ENABLED`
+- `SILENCE_MAX_VOLUME_DB`
 
 If this machine will run dual capture, also create:
 
@@ -100,6 +102,8 @@ Set the teammate-specific values in `.env.teammate`, especially:
 - `DATABASE_SSL_ROOT_CERT`
 - `AWS_REGION`
 - `S3_BUCKET`
+
+For any capture role on this machine, the uploader uses a conservative local silence filter. Obviously silent chunks may be skipped locally before upload, and lower, more negative `SILENCE_MAX_VOLUME_DB` values are safer for quiet speech.
 
 This doc assumes the shared database and bucket already exist.
 
@@ -206,6 +210,8 @@ For dual capture on this machine, the capture logs are:
 tail -f /tmp/ambient-memory.dual-capture.stdout.log
 tail -f /tmp/ambient-memory.dual-capture.stderr.log
 ```
+
+If the silence filter skips a silent chunk, the log line includes the source id, filename, measured level, and threshold. If quiet speech appears to be missing, lower `SILENCE_MAX_VOLUME_DB` or disable the filter for that capture env file.
 
 ## 7. Smoke Test
 

@@ -53,12 +53,16 @@ Set these laptop-specific values:
 - `SPOOL_DIR` as an absolute path like `/Users/your-user/Projects/ambient-memory-log/spool/desk-a`
 - `CAPTURE_MAX_BACKLOG_FILES` if you need to override the default local backlog cap of `2048` chunks; this must be a positive integer
 - `CAPTURE_DEVICE_NAME` from the exact device name reported by `ambient-memory list-devices`
+- `SILENCE_FILTER_ENABLED=true` to keep the conservative local silence filter on
+- `SILENCE_MAX_VOLUME_DB=-45.0` unless you need to tune it; lower, more negative values are safer for quiet speech
 
 Optional shared value:
 
 - `IMPORT_SPOOL_DIR` if you want prerecorded imports written somewhere other than `./spool/imports`
 
 Teammates do not run the worker or API on their laptops.
+
+The capture uploader uses a conservative local silence filter. Obviously silent chunks may be skipped locally before upload, but the default threshold is biased toward keeping quiet speech.
 
 ## 2. Pick The Mic
 
@@ -162,6 +166,8 @@ tail -f /tmp/ambient-memory.capture-agent.stderr.log
 ```
 
 If the laptop stays offline long enough to hit the local backlog cap, the agent pauses capture, keeps retrying backlog uploads, and resumes capture automatically once the backlog drains below the cap.
+
+When the silence filter skips a silent chunk, the capture logs include the source id, filename, measured level, and threshold. If you suspect quiet speech is being missed, lower `SILENCE_MAX_VOLUME_DB` to a more negative value or disable the filter.
 
 ## Common Mistakes
 

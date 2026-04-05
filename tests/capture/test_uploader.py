@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 import importlib
+import logging
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -356,6 +357,97 @@ def test_chunk_uploader_uploads_ready_chunks_and_updates_heartbeat(
     assert heartbeat.source_id == "desk-a"
     assert heartbeat.last_upload_at is not None
     assert client.put_calls[0]["Metadata"]["source_type"] == "macbook"
+    assert not list(spool.root.glob("*.wav"))
+
+
+def test_chunk_uploader_silence_filter_skips_obviously_silent_chunks_before_upload(
+    tmp_path: Path,
+    session_factory: sessionmaker[Session],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    uploader_module = load_uploader_module()
+    spool_module = load_spool_module()
+    client = RecordingS3Client()
+    chunk_path = write_chunk(spool_module.LocalSpool(tmp_path / "spool", settle_seconds=0).root / "chunk-session-20260402T090000.wav")
+    spool = spool_module.LocalSpool(tmp_path / "spool", settle_seconds=0)
+    caplog.set_level(logging.INFO)
+
+    uploader = uploader_module.ChunkUploader(
+        spool=spool,
+        s3_client=client,
+        session_factory=session_factory,
+        bucket="ambient-memory",
+        source_id="desk-a",
+        source_type="macbook",
+        device_owner="Dylan",
+        silence_filter_enabled=True,
+        silence_max_volume_db=-45.0,
+        measure_max_volume_db=lambda path: -72.0,
+        local_timezone=ZoneInfo("America/New_York"),
+    )
+
+    result = uploader.upload_ready(now=datetime(2026, 11, 1, 7, 0, 0, tzinfo=UTC))
+
+    session = session_factory()
+    try:
+        stored_chunk = session.scalar(select(AudioChunk))
+        heartbeat = session.scalar(select(AgentHeartbeat))
+    finally:
+        session.close()
+
+    assert result.attempted == 1
+    assert result.uploaded == 0
+    assert result.failed == 0
+    assert stored_chunk is None
+    assert heartbeat is None
+    assert client.put_calls == []
+    assert not chunk_path.exists()
+    assert not list(spool.retry_dir.glob("*.wav"))
+    assert (
+        "skipping silent chunk source_id=desk-a "
+        "filename=chunk-session-20260402T090000.wav "
+        "max_volume_db=-72.0 threshold_db=-45.0"
+    ) in caplog.text
+
+
+def test_chunk_uploader_silence_filter_keeps_upload_path_unchanged_for_non_silent_chunks_with_filter_enabled(
+    tmp_path: Path,
+    session_factory: sessionmaker[Session],
+) -> None:
+    uploader_module = load_uploader_module()
+    spool_module = load_spool_module()
+    client = RecordingS3Client()
+    spool = spool_module.LocalSpool(tmp_path / "spool", settle_seconds=0)
+    write_chunk(spool.root / "chunk-session-20260402T090000.wav")
+
+    uploader = uploader_module.ChunkUploader(
+        spool=spool,
+        s3_client=client,
+        session_factory=session_factory,
+        bucket="ambient-memory",
+        source_id="desk-a",
+        source_type="macbook",
+        device_owner="Dylan",
+        silence_filter_enabled=True,
+        silence_max_volume_db=-45.0,
+        measure_max_volume_db=lambda path: -20.0,
+        local_timezone=ZoneInfo("America/New_York"),
+    )
+
+    result = uploader.upload_ready(now=datetime(2026, 11, 1, 7, 0, 0, tzinfo=UTC))
+
+    session = session_factory()
+    try:
+        stored_chunk = session.scalar(select(AudioChunk))
+    finally:
+        session.close()
+
+    assert result.attempted == 1
+    assert result.uploaded == 1
+    assert result.failed == 0
+    assert stored_chunk is not None
+    assert stored_chunk.status == "uploaded"
+    assert client.put_calls[0]["Key"] == "raw-audio/desk-a/2026/04/02/20260402T130000.000000Z-session.wav"
     assert not list(spool.root.glob("*.wav"))
 
 
