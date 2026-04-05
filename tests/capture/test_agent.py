@@ -5,7 +5,8 @@ from types import SimpleNamespace
 from pydantic import ValidationError
 import pytest
 
-from ambient_memory.capture.agent import AgentRuntimeConfig, CaptureAgent, load_runtime_config
+from ambient_memory.capture.agent import AgentRuntimeConfig, CaptureAgent, load_runtime_config, run_capture_agent
+from ambient_memory.capture.device_discovery import AudioDevice
 from ambient_memory.capture.spool import SpoolBacklogFullError
 from ambient_memory.capture.uploader import UploadBatchResult
 
@@ -55,6 +56,71 @@ def test_load_runtime_config_dry_run_reads_capture_settings_from_dotenv(tmp_path
     assert config.active_start_local == "08:30"
     assert config.active_end_local == "22:15"
     assert config.max_backlog_files == 512
+
+
+def test_load_runtime_config_reads_capture_settings_from_explicit_env_file(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env.room-mic").write_text(
+        "\n".join(
+            (
+                "SOURCE_ID=room-1",
+                "SOURCE_TYPE=room",
+                "DEVICE_OWNER=conference-room",
+                "SPOOL_DIR=./spool/room-1",
+                "ACTIVE_START_LOCAL=08:30",
+                "ACTIVE_END_LOCAL=22:15",
+                "CAPTURE_MAX_BACKLOG_FILES=512",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _clear_agent_env(monkeypatch)
+
+    config = load_runtime_config(dry_run=True, env_file=".env.room-mic")
+
+    assert config.source_id == "room-1"
+    assert config.source_type == "room"
+    assert config.device_owner == "conference-room"
+    assert config.spool_dir == Path("./spool/room-1")
+
+
+def test_run_capture_agent_uses_capture_device_name_from_env_file_when_no_flag_is_passed(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env.room-mic").write_text(
+        "\n".join(
+            (
+                "SOURCE_ID=room-1",
+                "SOURCE_TYPE=room",
+                "DEVICE_OWNER=conference-room",
+                "SPOOL_DIR=./spool/room-1",
+                "CAPTURE_DEVICE_NAME=Anker Soundsync",
+                "ACTIVE_START_LOCAL=08:30",
+                "ACTIVE_END_LOCAL=22:15",
+                "CAPTURE_MAX_BACKLOG_FILES=512",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _clear_agent_env(monkeypatch)
+    monkeypatch.setattr(
+        "ambient_memory.capture.agent.list_local_audio_devices",
+        lambda ffmpeg_binary="ffmpeg": [
+            AudioDevice(index="0", name="Anker Soundsync"),
+            AudioDevice(index="1", name="MacBook Pro Microphone"),
+        ],
+    )
+
+    run_capture_agent(dry_run=True, env_file=".env.room-mic")
+
+    captured = capsys.readouterr()
+
+    assert "Anker Soundsync" in captured.out
 
 
 def test_load_runtime_config_non_dry_run_reads_required_settings_from_dotenv(tmp_path: Path, monkeypatch) -> None:
@@ -175,6 +241,7 @@ def _build_agent(uploader) -> CaptureAgent:
             source_type="macbook",
             device_owner="dylan",
             spool_dir=Path("/tmp/spool"),
+            capture_device_name="Built-in Microphone",
             active_start_local="00:00",
             active_end_local="00:00",
             max_backlog_files=uploader.spool.max_backlog_files,

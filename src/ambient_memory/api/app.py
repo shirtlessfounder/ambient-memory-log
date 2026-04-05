@@ -19,7 +19,7 @@ from ambient_memory.api.schemas import (
     UtteranceDetailResponse,
 )
 from ambient_memory.api.search import SearchService, SearchUtteranceRecord, UtteranceDetailRecord
-from ambient_memory.config import ApiSettings
+from ambient_memory.config import ApiSettings, load_settings
 from ambient_memory.db import build_session_factory
 
 
@@ -75,12 +75,13 @@ def run_api_server(
     *,
     host: str | None = None,
     port: int | None = None,
+    env_file: str | None = None,
     settings: ApiSettings | None = None,
     session_factory: sessionmaker[Session] | None = None,
     s3_client: Any | None = None,
     server_runner: Callable[..., Any] = uvicorn.run,
 ) -> None:
-    resolved_settings = settings or ApiSettings()
+    resolved_settings = settings or load_settings(ApiSettings, env_file=env_file)
     resolved_session_factory = session_factory or build_session_factory(resolved_settings)
     resolved_s3_client = s3_client or boto3.client("s3", region_name=resolved_settings.aws_region)
 

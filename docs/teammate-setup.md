@@ -27,13 +27,13 @@ cd "$HOME/Projects/ambient-memory-log"
 uv sync
 ```
 
-## 1. Create `.env`
+## 1. Create `.env.teammate`
 
-Create `.env` in the repo root:
+Create `.env.teammate` in the repo root:
 
 ```bash
 cd "$HOME/Projects/ambient-memory-log"
-cp .env.example .env
+cp .env.example .env.teammate
 ```
 
 Set these shared values:
@@ -69,7 +69,7 @@ cd "$HOME/Projects/ambient-memory-log"
 uv run ambient-memory list-devices
 ```
 
-Copy the exact built-in mic name into `CAPTURE_DEVICE_NAME` in `.env`.
+Copy the exact built-in mic name into `CAPTURE_DEVICE_NAME` in `.env.teammate`.
 
 ## 3. Dry-Run The Agent
 
@@ -77,7 +77,7 @@ Validate the config before starting background capture:
 
 ```bash
 cd "$HOME/Projects/ambient-memory-log"
-uv run ambient-memory agent run --dry-run --device "Built-in Microphone"
+uv run ambient-memory start-teammate --dry-run
 ```
 
 Expected result:
@@ -87,7 +87,7 @@ Expected result:
 - spool path is correct
 - active window is correct
 
-If the dry-run only works with a different device string, update `CAPTURE_DEVICE_NAME` in `.env` to match exactly.
+If the dry-run only works with a different device string, update `CAPTURE_DEVICE_NAME` in `.env.teammate` to match exactly.
 
 ## 4. Enroll Your Voiceprint
 
@@ -167,7 +167,7 @@ If the laptop stays offline long enough to hit the local backlog cap, the agent 
 
 - repo not cloned at `$HOME/Projects/ambient-memory-log`
 - `CAPTURE_DEVICE_NAME` does not exactly match `ambient-memory list-devices`
-- `.env` missing or incomplete
+- `.env.teammate` missing or incomplete
 - `CAPTURE_MAX_BACKLOG_FILES` set too low for the expected offline window
 - `SPOOL_DIR` is not an absolute path
 - `ffmpeg` missing from the machine

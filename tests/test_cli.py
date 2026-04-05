@@ -19,6 +19,10 @@ def test_cli_lists_expected_commands() -> None:
     assert "enroll" in help_text
     assert "import-recording" in help_text
     assert "list-devices" in help_text
+    assert "start-teammate" in help_text
+    assert "start-room-mic" in help_text
+    assert "start-worker" in help_text
+    assert "start-api" in help_text
 
 
 def test_cli_list_devices_renders_detected_inputs(monkeypatch) -> None:
@@ -41,12 +45,19 @@ def test_cli_agent_run_wires_dry_run_flag(monkeypatch) -> None:
 
     calls: dict[str, object] = {}
 
-    def fake_run_capture_agent(*, dry_run: bool, ffmpeg_binary: str, device_selection: str | None) -> None:
+    def fake_run_capture_agent(
+        *,
+        dry_run: bool,
+        ffmpeg_binary: str,
+        device_selection: str | None,
+        env_file,
+    ) -> None:
         calls.update(
             {
                 "dry_run": dry_run,
                 "ffmpeg_binary": ffmpeg_binary,
                 "device_selection": device_selection,
+                "env_file": env_file,
             }
         )
 
@@ -59,6 +70,75 @@ def test_cli_agent_run_wires_dry_run_flag(monkeypatch) -> None:
         "dry_run": True,
         "ffmpeg_binary": "ffmpeg",
         "device_selection": None,
+        "env_file": None,
+    }
+
+
+def test_cli_start_teammate_uses_teammate_env_file(monkeypatch) -> None:
+    from ambient_memory import cli
+
+    calls: dict[str, object] = {}
+
+    def fake_run_capture_agent(
+        *,
+        dry_run: bool,
+        ffmpeg_binary: str,
+        device_selection: str | None,
+        env_file,
+    ) -> None:
+        calls.update(
+            {
+                "dry_run": dry_run,
+                "ffmpeg_binary": ffmpeg_binary,
+                "device_selection": device_selection,
+                "env_file": env_file,
+            }
+        )
+
+    monkeypatch.setattr(cli, "run_capture_agent", fake_run_capture_agent)
+
+    result = runner.invoke(app, ["start-teammate", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert calls == {
+        "dry_run": True,
+        "ffmpeg_binary": "ffmpeg",
+        "device_selection": None,
+        "env_file": ".env.teammate",
+    }
+
+
+def test_cli_start_room_mic_uses_room_env_file(monkeypatch) -> None:
+    from ambient_memory import cli
+
+    calls: dict[str, object] = {}
+
+    def fake_run_capture_agent(
+        *,
+        dry_run: bool,
+        ffmpeg_binary: str,
+        device_selection: str | None,
+        env_file,
+    ) -> None:
+        calls.update(
+            {
+                "dry_run": dry_run,
+                "ffmpeg_binary": ffmpeg_binary,
+                "device_selection": device_selection,
+                "env_file": env_file,
+            }
+        )
+
+    monkeypatch.setattr(cli, "run_capture_agent", fake_run_capture_agent)
+
+    result = runner.invoke(app, ["start-room-mic", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert calls == {
+        "dry_run": True,
+        "ffmpeg_binary": "ffmpeg",
+        "device_selection": None,
+        "env_file": ".env.room-mic",
     }
 
 
@@ -92,15 +172,33 @@ def test_cli_worker_run_wires_poll_seconds(monkeypatch) -> None:
 
     calls: dict[str, object] = {}
 
-    def fake_run_worker(*, poll_seconds: float) -> None:
+    def fake_run_worker(*, poll_seconds: float, env_file) -> None:
         calls["poll_seconds"] = poll_seconds
+        calls["env_file"] = env_file
 
     monkeypatch.setattr(cli, "run_worker_loop", fake_run_worker)
 
     result = runner.invoke(app, ["worker", "run", "--poll-seconds", "2.5"])
 
     assert result.exit_code == 0
-    assert calls == {"poll_seconds": 2.5}
+    assert calls == {"poll_seconds": 2.5, "env_file": None}
+
+
+def test_cli_start_worker_uses_worker_env_file(monkeypatch) -> None:
+    from ambient_memory import cli
+
+    calls: dict[str, object] = {}
+
+    def fake_run_worker(*, poll_seconds: float, env_file) -> None:
+        calls["poll_seconds"] = poll_seconds
+        calls["env_file"] = env_file
+
+    monkeypatch.setattr(cli, "run_worker_loop", fake_run_worker)
+
+    result = runner.invoke(app, ["start-worker", "--poll-seconds", "2.5"])
+
+    assert result.exit_code == 0
+    assert calls == {"poll_seconds": 2.5, "env_file": ".env.worker"}
 
 
 def test_cli_api_without_subcommand_starts_server(monkeypatch) -> None:
@@ -108,16 +206,17 @@ def test_cli_api_without_subcommand_starts_server(monkeypatch) -> None:
 
     calls: dict[str, object] = {}
 
-    def fake_run_api_server(*, host: str | None = None, port: int | None = None) -> None:
+    def fake_run_api_server(*, host: str | None = None, port: int | None = None, env_file=None) -> None:
         calls["host"] = host
         calls["port"] = port
+        calls["env_file"] = env_file
 
     monkeypatch.setattr(cli, "run_api_server", fake_run_api_server)
 
     result = runner.invoke(app, ["api", "--host", "0.0.0.0", "--port", "9001"])
 
     assert result.exit_code == 0
-    assert calls == {"host": "0.0.0.0", "port": 9001}
+    assert calls == {"host": "0.0.0.0", "port": 9001, "env_file": None}
 
 
 def test_cli_api_run_alias_still_wires_host_and_port(monkeypatch) -> None:
@@ -125,16 +224,35 @@ def test_cli_api_run_alias_still_wires_host_and_port(monkeypatch) -> None:
 
     calls: dict[str, object] = {}
 
-    def fake_run_api_server(*, host: str | None = None, port: int | None = None) -> None:
+    def fake_run_api_server(*, host: str | None = None, port: int | None = None, env_file=None) -> None:
         calls["host"] = host
         calls["port"] = port
+        calls["env_file"] = env_file
 
     monkeypatch.setattr(cli, "run_api_server", fake_run_api_server)
 
     result = runner.invoke(app, ["api", "run", "--host", "0.0.0.0", "--port", "9001"])
 
     assert result.exit_code == 0
-    assert calls == {"host": "0.0.0.0", "port": 9001}
+    assert calls == {"host": "0.0.0.0", "port": 9001, "env_file": None}
+
+
+def test_cli_start_api_uses_api_env_file(monkeypatch) -> None:
+    from ambient_memory import cli
+
+    calls: dict[str, object] = {}
+
+    def fake_run_api_server(*, host: str | None = None, port: int | None = None, env_file=None) -> None:
+        calls["host"] = host
+        calls["port"] = port
+        calls["env_file"] = env_file
+
+    monkeypatch.setattr(cli, "run_api_server", fake_run_api_server)
+
+    result = runner.invoke(app, ["start-api", "--host", "0.0.0.0", "--port", "9001"])
+
+    assert result.exit_code == 0
+    assert calls == {"host": "0.0.0.0", "port": 9001, "env_file": ".env.api"}
 
 
 def test_cli_enroll_voiceprint_help_lists_required_options() -> None:

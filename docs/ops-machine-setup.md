@@ -26,31 +26,50 @@ cd "$HOME/Projects/ambient-memory-log"
 uv sync
 ```
 
-## 1. Create `.env`
+## 1. Create Role Env Files
 
-Create `.env` in the repo root:
+Create the env files you need in the repo root:
 
 ```bash
 cd "$HOME/Projects/ambient-memory-log"
-cp .env.example .env
+cp .env.example .env.worker
+cp .env.example .env.api
 ```
 
-Set these values:
+Set these values in `.env.worker`:
 
 - `DATABASE_URL`
 - `DATABASE_SSL_ROOT_CERT`
 - `AWS_REGION`
-- `S3_BUCKET`
 - `DEEPGRAM_API_KEY`
 - `PYANNOTE_API_KEY`
 
+Set these values in `.env.api`:
+
+- `DATABASE_URL`
+- `DATABASE_SSL_ROOT_CERT`
+- `AWS_REGION`
+- `API_HOST`
+- `API_PORT`
+- `API_PRESIGN_EXPIRES_IN`
+
 If this machine also captures the office mic, also set:
+
+```bash
+cp .env.example .env.room-mic
+```
+
+Set these values in `.env.room-mic`:
 
 - `SOURCE_ID` like `room-1`
 - `SOURCE_TYPE=room`
 - `DEVICE_OWNER=conference-room`
 - `SPOOL_DIR` as an absolute path like `/Users/your-user/Projects/ambient-memory-log/spool/room-1`
 - `CAPTURE_DEVICE_NAME`
+- `DATABASE_URL`
+- `DATABASE_SSL_ROOT_CERT`
+- `AWS_REGION`
+- `S3_BUCKET`
 
 Optional:
 
@@ -68,7 +87,7 @@ If this machine owns the office microphone, validate the device first:
 ```bash
 cd "$HOME/Projects/ambient-memory-log"
 uv run ambient-memory list-devices
-uv run ambient-memory agent run --dry-run --device "USB Audio CODEC"
+uv run ambient-memory start-room-mic --dry-run
 ```
 
 Then load the capture agent:
@@ -90,7 +109,7 @@ Manual start:
 
 ```bash
 cd "$HOME/Projects/ambient-memory-log"
-uv run ambient-memory worker run
+uv run ambient-memory start-worker
 ```
 
 What it does:
@@ -107,7 +126,7 @@ Manual start:
 
 ```bash
 cd "$HOME/Projects/ambient-memory-log"
-uv run ambient-memory api --host 127.0.0.1 --port 8000
+uv run ambient-memory start-api
 ```
 
 What it does:

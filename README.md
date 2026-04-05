@@ -6,7 +6,7 @@ Recall-first ambient memory log MVP.
 
 1. Install `ffmpeg` on macOS.
 2. Install project dependencies with `uv sync`.
-3. Copy `.env.example` to `.env` and fill in the required values.
+3. Create the role-specific env file you need from `.env.example`.
 
 `CAPTURE_MAX_BACKLOG_FILES` defaults to `2048` and must be a positive integer so the capture agent can tolerate a longer offline window before it pauses local capture and focuses on draining backlog uploads.
 
@@ -14,6 +14,10 @@ Recall-first ambient memory log MVP.
 
 - `uv run ambient-memory list-devices`
 - `uv run ambient-memory agent run --dry-run --device "Built-in Microphone"`
+- `uv run ambient-memory start-teammate`
+- `uv run ambient-memory start-room-mic`
+- `uv run ambient-memory start-worker`
+- `uv run ambient-memory start-api`
 - `uv run ambient-memory import-recording ./meeting.m4a --start "2026-04-03 09:00"`
   Re-running the same source id now prompts before append; use `--allow-existing-source-id` only for deliberate reruns.
 - `uv run ambient-memory worker run-once --dry-run`

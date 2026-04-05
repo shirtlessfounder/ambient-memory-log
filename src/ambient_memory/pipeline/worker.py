@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from ambient_memory.config import DatabaseSettings, WorkerSettings
+from ambient_memory.config import DatabaseSettings, WorkerSettings, load_settings
 from ambient_memory.db import build_session_factory
 from ambient_memory.integrations.deepgram_client import DeepgramClient
 from ambient_memory.integrations.pyannote_client import IdentificationMatch, PyannoteClient, VoiceprintReference
@@ -366,9 +366,9 @@ class PipelineWorker:
             row.error_message = error_message
 
 
-def run_worker_once(*, dry_run: bool = False) -> WorkerRunResult:
+def run_worker_once(*, dry_run: bool = False, env_file: str | None = None) -> WorkerRunResult:
     configure_logging()
-    config = load_worker_runtime_config(dry_run=dry_run)
+    config = load_worker_runtime_config(dry_run=dry_run, env_file=env_file)
     session_factory = build_session_factory(
         DatabaseSettings(
             database_url=config.database_url,
@@ -388,9 +388,9 @@ def run_worker_once(*, dry_run: bool = False) -> WorkerRunResult:
     return worker.run_once()
 
 
-def run_worker_loop(*, poll_seconds: float = 5.0) -> None:
+def run_worker_loop(*, poll_seconds: float = 5.0, env_file: str | None = None) -> None:
     configure_logging()
-    worker = build_worker(load_worker_runtime_config(dry_run=False))
+    worker = build_worker(load_worker_runtime_config(dry_run=False, env_file=env_file))
     worker.run(poll_seconds=poll_seconds)
 
 
@@ -415,9 +415,9 @@ def build_worker(config: WorkerRuntimeConfig) -> PipelineWorker:
     )
 
 
-def load_worker_runtime_config(*, dry_run: bool) -> WorkerRuntimeConfig:
+def load_worker_runtime_config(*, dry_run: bool, env_file: str | None = None) -> WorkerRuntimeConfig:
     try:
-        settings = WorkerSettings()
+        settings = load_settings(WorkerSettings, env_file=env_file)
     except ValidationError as exc:
         missing_fields = sorted(
             str(error["loc"][0])

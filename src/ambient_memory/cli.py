@@ -236,6 +236,37 @@ def agent_run(
         dry_run=dry_run,
         ffmpeg_binary=ffmpeg_binary,
         device_selection=device_selection,
+        env_file=None,
+    )
+
+
+@app.command("start-teammate")
+def start_teammate(
+    dry_run: bool = Option(False, "--dry-run", help="Log configuration without recording or uploading."),
+    ffmpeg_binary: str = Option("ffmpeg", help="Path to the ffmpeg binary."),
+    device_selection: str | None = Option(None, "--device", help="Audio device name or index."),
+) -> None:
+    """Start teammate laptop capture using .env.teammate."""
+    run_capture_agent(
+        dry_run=dry_run,
+        ffmpeg_binary=ffmpeg_binary,
+        device_selection=device_selection,
+        env_file=".env.teammate",
+    )
+
+
+@app.command("start-room-mic")
+def start_room_mic(
+    dry_run: bool = Option(False, "--dry-run", help="Log configuration without recording or uploading."),
+    ffmpeg_binary: str = Option("ffmpeg", help="Path to the ffmpeg binary."),
+    device_selection: str | None = Option(None, "--device", help="Audio device name or index."),
+) -> None:
+    """Start room microphone capture using .env.room-mic."""
+    run_capture_agent(
+        dry_run=dry_run,
+        ffmpeg_binary=ffmpeg_binary,
+        device_selection=device_selection,
+        env_file=".env.room-mic",
     )
 
 
@@ -253,14 +284,22 @@ def worker_run(
     poll_seconds: float = Option(5.0, "--poll-seconds", min=0.1, help="Seconds to wait between worker polls."),
 ) -> None:
     """Poll and process uploaded audio chunks continuously."""
-    run_worker_loop(poll_seconds=poll_seconds)
+    run_worker_loop(poll_seconds=poll_seconds, env_file=None)
+
+
+@app.command("start-worker")
+def start_worker(
+    poll_seconds: float = Option(5.0, "--poll-seconds", min=0.1, help="Seconds to wait between worker polls."),
+) -> None:
+    """Start the worker using .env.worker."""
+    run_worker_loop(poll_seconds=poll_seconds, env_file=".env.worker")
 
 
 def _start_api_server(
     host: str | None = Option(None, "--host", help="Host interface to bind the API server to."),
     port: int | None = Option(None, "--port", min=1, max=65535, help="Port to bind the API server to."),
 ) -> None:
-    run_api_server(host=host, port=port)
+    run_api_server(host=host, port=port, env_file=None)
 
 
 @api_app.callback()
@@ -281,6 +320,15 @@ def api_run(
 ) -> None:
     """Run the read API."""
     _start_api_server(host=host, port=port)
+
+
+@app.command("start-api")
+def start_api(
+    host: str | None = Option(None, "--host", help="Host interface to bind the API server to."),
+    port: int | None = Option(None, "--port", min=1, max=65535, help="Port to bind the API server to."),
+) -> None:
+    """Start the read API using .env.api."""
+    run_api_server(host=host, port=port, env_file=".env.api")
 
 
 @enroll_app.command("voiceprint")

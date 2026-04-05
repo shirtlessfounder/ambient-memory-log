@@ -45,7 +45,7 @@ def test_launchd_templates_exist_for_worker_and_api() -> None:
 def test_teammate_setup_doc_mentions_env_launchctl_and_logs() -> None:
     text = _read("docs/teammate-setup.md").lower()
 
-    assert ".env" in text
+    assert ".env.teammate" in text
     assert "capture_device_name" in text
     assert "launchctl" in text
     assert "log" in text
@@ -57,7 +57,7 @@ def test_teammate_setup_doc_covers_install_validation_voiceprint_and_service_flo
     assert "uv sync" in text
     assert "ffmpeg" in text
     assert "ambient-memory list-devices" in text
-    assert "ambient-memory agent run --dry-run" in text
+    assert "ambient-memory start-teammate --dry-run" in text
     assert "voiceprint-live" in text
     assert "launchctl bootstrap" in text
     assert "launchctl bootout" in text
@@ -66,9 +66,10 @@ def test_teammate_setup_doc_covers_install_validation_voiceprint_and_service_flo
 def test_ops_machine_setup_doc_covers_worker_api_and_optional_room_capture() -> None:
     text = _read("docs/ops-machine-setup.md").lower()
 
-    assert ".env" in text
-    assert "worker" in text
-    assert "api" in text
+    assert ".env.worker" in text
+    assert ".env.api" in text
+    assert "start-worker" in text
+    assert "start-api" in text
     assert "room" in text
     assert "launchctl" in text
     assert "smoke-test.md" in text
@@ -76,10 +77,13 @@ def test_ops_machine_setup_doc_covers_worker_api_and_optional_room_capture() -> 
 
 def test_capture_agent_launchd_template_references_wrapper_script() -> None:
     text = _read("deploy/launchd/com.ambient-memory.capture-agent.plist")
+    script_text = _read("scripts/start-capture-agent.sh")
 
     assert "start-capture-agent.sh" in text
     assert "<key>RunAtLoad</key>" in text
     assert "<key>KeepAlive</key>" in text
+    assert ".env.teammate" in script_text
+    assert "start-teammate" in script_text
 
 
 def test_env_example_mentions_capture_device_name() -> None:
@@ -94,6 +98,10 @@ def test_readme_links_teammate_and_ops_machine_setup_docs() -> None:
     assert "docs/teammate-setup.md" in text
     assert "docs/ops-machine-setup.md" in text
     assert "deploy/launchd/com.ambient-memory.capture-agent.plist" in text
+    assert "start-teammate" in text
+    assert "start-room-mic" in text
+    assert "start-worker" in text
+    assert "start-api" in text
 
 
 def test_voiceprint_docs_exist_and_reference_live_enrollment() -> None:

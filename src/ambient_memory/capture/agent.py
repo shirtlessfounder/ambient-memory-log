@@ -12,7 +12,7 @@ from ambient_memory.capture.device_discovery import AudioDevice, select_audio_de
 from ambient_memory.capture.ffmpeg import DEFAULT_SEGMENT_SECONDS, build_capture_command
 from ambient_memory.capture.spool import LocalSpool, SpoolBacklogFullError
 from ambient_memory.capture.uploader import ChunkUploader, UploadBatchResult
-from ambient_memory.config import CaptureSettings, DatabaseSettings
+from ambient_memory.config import CaptureSettings, DatabaseSettings, load_settings
 from ambient_memory.db import build_session_factory, record_agent_heartbeat
 from ambient_memory.logging import configure_logging
 
@@ -26,6 +26,7 @@ class AgentRuntimeConfig:
     source_type: str
     device_owner: str | None
     spool_dir: Path
+    capture_device_name: str | None
     max_backlog_files: int
     active_start_local: str
     active_end_local: str
@@ -218,13 +219,14 @@ def run_capture_agent(
     dry_run: bool,
     ffmpeg_binary: str = "ffmpeg",
     device_selection: str | None = None,
+    env_file: str | None = None,
 ) -> None:
     configure_logging()
-    config = load_runtime_config(dry_run=dry_run)
+    config = load_runtime_config(dry_run=dry_run, env_file=env_file)
     spool = LocalSpool(config.spool_dir, max_backlog_files=config.max_backlog_files)
     spool.ensure()
     devices = list_local_audio_devices(ffmpeg_binary)
-    device = choose_audio_device(devices, device_selection)
+    device = choose_audio_device(devices, device_selection or config.capture_device_name)
 
     if dry_run:
         LOGGER.info("dry-run device=%s", device.name)
@@ -282,11 +284,12 @@ def is_within_active_window(*, now: time, start: time, end: time) -> bool:
     return now >= start or now < end
 
 
-def load_runtime_config(*, dry_run: bool) -> AgentRuntimeConfig:
-    settings = CaptureSettings()
+def load_runtime_config(*, dry_run: bool, env_file: str | None = None) -> AgentRuntimeConfig:
+    settings = load_settings(CaptureSettings, env_file=env_file)
     source_id = settings.source_id
     source_type = settings.source_type
     spool_dir = Path(settings.spool_dir)
+    capture_device_name = settings.capture_device_name
     max_backlog_files = settings.capture_max_backlog_files
     active_start_local = settings.active_start_local
     active_end_local = settings.active_end_local
@@ -298,6 +301,7 @@ def load_runtime_config(*, dry_run: bool) -> AgentRuntimeConfig:
             source_type=source_type,
             device_owner=device_owner,
             spool_dir=spool_dir,
+            capture_device_name=capture_device_name,
             max_backlog_files=max_backlog_files,
             active_start_local=active_start_local,
             active_end_local=active_end_local,
@@ -317,6 +321,7 @@ def load_runtime_config(*, dry_run: bool) -> AgentRuntimeConfig:
         source_type=source_type,
         device_owner=device_owner,
         spool_dir=spool_dir,
+        capture_device_name=capture_device_name,
         max_backlog_files=max_backlog_files,
         active_start_local=active_start_local,
         active_end_local=active_end_local,
