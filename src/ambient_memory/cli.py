@@ -1,8 +1,13 @@
+import signal
+import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import math
 from pathlib import Path
+import threading
+import time
+from typing import TextIO
 
 from typer import Argument, Context, Exit, Option, Typer
 from typer.testing import CliRunner
@@ -44,6 +49,12 @@ WORKER_ESTIMATE_HIGH_SECONDS_PER_CHUNK = 13.5
 class WorkerRuntimeEstimate:
     duration_text: str
     completion_text: str
+
+
+@dataclass(frozen=True, slots=True)
+class DualCaptureChildSpec:
+    role: str
+    command: tuple[str, ...]
 
 
 def _render_worker_run_once_result(result: object, *, dry_run: bool) -> None:
@@ -164,6 +175,136 @@ def _should_append_existing_source_id(
         print("Please answer y or n.")
 
 
+def _stream_process_output(role: str, label: str, stream: TextIO, *, output: TextIO) -> None:
+    for line in iter(stream.readline, ""):
+        message = line.rstrip()
+        if message:
+            print(f"[{role} {label}] {message}", file=output, flush=True)
+    stream.close()
+
+
+def _start_process_output_threads(role: str, process: subprocess.Popen[str]) -> list[threading.Thread]:
+    threads: list[threading.Thread] = []
+
+    if process.stdout is not None:
+        stdout_thread = threading.Thread(
+            target=_stream_process_output,
+            args=(role, "stdout", process.stdout),
+            kwargs={"output": sys.stdout},
+            daemon=True,
+        )
+        stdout_thread.start()
+        threads.append(stdout_thread)
+
+    if process.stderr is not None:
+        stderr_thread = threading.Thread(
+            target=_stream_process_output,
+            args=(role, "stderr", process.stderr),
+            kwargs={"output": sys.stderr},
+            daemon=True,
+        )
+        stderr_thread.start()
+        threads.append(stderr_thread)
+
+    return threads
+
+
+def _stop_child_processes(
+    processes: list[subprocess.Popen[str]],
+    *,
+    terminate_timeout_seconds: float = 5.0,
+) -> None:
+    for process in processes:
+        if process.poll() is None:
+            process.terminate()
+
+    for process in processes:
+        if process.poll() is not None:
+            continue
+        try:
+            process.wait(timeout=terminate_timeout_seconds)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
+def _run_dual_capture(
+    *,
+    child_specs: tuple[DualCaptureChildSpec, ...],
+    cwd: Path,
+    popen_factory=subprocess.Popen,
+    sleep_fn=time.sleep,
+    poll_seconds: float = 0.1,
+) -> int:
+    processes: list[tuple[DualCaptureChildSpec, subprocess.Popen[str]]] = []
+    threads: list[threading.Thread] = []
+    requested_signal: int | None = None
+    previous_handlers: list[tuple[int, object]] = []
+
+    def handle_signal(signum: int, _frame: object) -> None:
+        nonlocal requested_signal
+        requested_signal = signum
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        previous_handlers.append((signum, signal.getsignal(signum)))
+        signal.signal(signum, handle_signal)
+
+    try:
+        for child_spec in child_specs:
+            try:
+                process = popen_factory(
+                    child_spec.command,
+                    cwd=str(cwd),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1,
+                )
+            except OSError as error:
+                print(f"[{child_spec.role} supervisor] failed to start: {error}", file=sys.stderr)
+                _stop_child_processes([running_process for _, running_process in processes])
+                return 1
+
+            processes.append((child_spec, process))
+            threads.extend(_start_process_output_threads(child_spec.role, process))
+
+        while True:
+            if requested_signal is not None:
+                _stop_child_processes([process for _, process in processes])
+                return 128 + requested_signal
+
+            for index, (child_spec, process) in enumerate(processes):
+                return_code = process.poll()
+                if return_code is None:
+                    continue
+
+                print(
+                    f"[{child_spec.role} supervisor] child exited unexpectedly with code {return_code}",
+                    file=sys.stderr,
+                )
+                sibling_processes = [other_process for position, (_, other_process) in enumerate(processes) if position != index]
+                _stop_child_processes(sibling_processes)
+                return return_code if return_code != 0 else 1
+
+            sleep_fn(poll_seconds)
+    except KeyboardInterrupt:
+        _stop_child_processes([process for _, process in processes])
+        return 130
+    finally:
+        for signum, previous_handler in previous_handlers:
+            signal.signal(signum, previous_handler)
+        for thread in threads:
+            thread.join(timeout=1.0)
+
+
+def _validate_dual_capture_env_files(cwd: Path) -> bool:
+    required_env_files = (".env.teammate", ".env.room-mic")
+    missing = [env_file for env_file in required_env_files if not (cwd / env_file).is_file()]
+    for env_file in missing:
+        print(f"missing {env_file} in {cwd}", file=sys.stderr)
+    return not missing
+
+
 @app.command("import-recording")
 def import_recording(
     recording_path: Path = Argument(
@@ -268,6 +409,24 @@ def start_room_mic(
         device_selection=device_selection,
         env_file=".env.room-mic",
     )
+
+
+@app.command("start-dual-capture")
+def start_dual_capture() -> None:
+    """Start teammate and room-mic capture together."""
+    cwd = Path.cwd()
+    if not _validate_dual_capture_env_files(cwd):
+        raise Exit(code=1)
+
+    exit_code = _run_dual_capture(
+        child_specs=(
+            DualCaptureChildSpec("teammate", ("uv", "run", "ambient-memory", "start-teammate")),
+            DualCaptureChildSpec("room-mic", ("uv", "run", "ambient-memory", "start-room-mic")),
+        ),
+        cwd=cwd,
+    )
+    if exit_code != 0:
+        raise Exit(code=exit_code)
 
 
 @worker_app.command("run-once")

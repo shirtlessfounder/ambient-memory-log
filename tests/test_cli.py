@@ -1,4 +1,6 @@
+import io
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from typer.testing import CliRunner
@@ -21,6 +23,7 @@ def test_cli_lists_expected_commands() -> None:
     assert "list-devices" in help_text
     assert "start-teammate" in help_text
     assert "start-room-mic" in help_text
+    assert "start-dual-capture" in help_text
     assert "start-worker" in help_text
     assert "start-api" in help_text
 
@@ -140,6 +143,164 @@ def test_cli_start_room_mic_uses_room_env_file(monkeypatch) -> None:
         "device_selection": None,
         "env_file": ".env.room-mic",
     }
+
+
+def test_cli_start_dual_capture_wires_expected_child_commands(monkeypatch) -> None:
+    from ambient_memory import cli
+
+    calls: dict[str, object] = {}
+
+    def fake_run_dual_capture(*, child_specs, cwd: Path) -> int:
+        calls["child_specs"] = child_specs
+        calls["cwd"] = cwd
+        return 0
+
+    monkeypatch.setattr(cli, "_run_dual_capture", fake_run_dual_capture)
+
+    with runner.isolated_filesystem():
+        Path(".env.teammate").write_text("SOURCE_ID=desk-a\n", encoding="utf-8")
+        Path(".env.room-mic").write_text("SOURCE_ID=room-1\n", encoding="utf-8")
+
+        result = runner.invoke(app, ["start-dual-capture"])
+
+        assert result.exit_code == 0
+        assert calls["cwd"] == Path.cwd()
+        assert [(spec.role, spec.command) for spec in calls["child_specs"]] == [
+            ("teammate", ("uv", "run", "ambient-memory", "start-teammate")),
+            ("room-mic", ("uv", "run", "ambient-memory", "start-room-mic")),
+        ]
+
+
+def test_cli_start_dual_capture_requires_both_env_files(monkeypatch) -> None:
+    from ambient_memory import cli
+
+    called = False
+
+    def fake_run_dual_capture(*, child_specs, cwd: Path) -> int:
+        nonlocal called
+        called = True
+        return 0
+
+    monkeypatch.setattr(cli, "_run_dual_capture", fake_run_dual_capture)
+
+    with runner.isolated_filesystem():
+        Path(".env.teammate").write_text("SOURCE_ID=desk-a\n", encoding="utf-8")
+
+        result = runner.invoke(app, ["start-dual-capture"])
+
+    assert result.exit_code == 1
+    assert ".env.room-mic" in result.output
+    assert called is False
+
+
+def test_run_dual_capture_stops_sibling_when_child_exits(monkeypatch, tmp_path: Path) -> None:
+    from ambient_memory import cli
+
+    class FakeProcess:
+        def __init__(self, returncodes: list[int | None]) -> None:
+            self.returncodes = list(returncodes)
+            self.stdout = io.StringIO("")
+            self.stderr = io.StringIO("")
+            self.terminated = False
+            self.killed = False
+
+        def poll(self) -> int | None:
+            if self.returncodes:
+                value = self.returncodes.pop(0)
+                if value is not None:
+                    self.returncode = value
+                return value
+            return getattr(self, "returncode", None)
+
+        def terminate(self) -> None:
+            self.terminated = True
+            self.returncode = -15
+
+        def kill(self) -> None:
+            self.killed = True
+            self.returncode = -9
+
+        def wait(self, timeout: float | None = None) -> int:
+            return getattr(self, "returncode", 0)
+
+    processes = [FakeProcess([None, None]), FakeProcess([7])]
+    popen_calls: list[tuple[tuple[str, ...], str]] = []
+
+    def fake_popen(command, *, cwd, stdout, stderr, text, bufsize):
+        popen_calls.append((tuple(command), cwd))
+        return processes[len(popen_calls) - 1]
+
+    monkeypatch.setattr(cli, "_start_process_output_threads", lambda role, process: [])
+
+    exit_code = cli._run_dual_capture(
+        child_specs=(
+            cli.DualCaptureChildSpec("teammate", ("uv", "run", "ambient-memory", "start-teammate")),
+            cli.DualCaptureChildSpec("room-mic", ("uv", "run", "ambient-memory", "start-room-mic")),
+        ),
+        cwd=tmp_path,
+        popen_factory=fake_popen,
+        sleep_fn=lambda _: None,
+    )
+
+    assert exit_code == 7
+    assert popen_calls == [
+        (("uv", "run", "ambient-memory", "start-teammate"), str(tmp_path)),
+        (("uv", "run", "ambient-memory", "start-room-mic"), str(tmp_path)),
+    ]
+    assert processes[0].terminated is True
+    assert processes[0].killed is False
+
+
+def test_run_dual_capture_stops_both_children_on_interrupt(monkeypatch, tmp_path: Path) -> None:
+    from ambient_memory import cli
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.stdout = io.StringIO("")
+            self.stderr = io.StringIO("")
+            self.terminated = False
+            self.killed = False
+
+        def poll(self) -> int | None:
+            return None
+
+        def terminate(self) -> None:
+            self.terminated = True
+            self.returncode = -15
+
+        def kill(self) -> None:
+            self.killed = True
+            self.returncode = -9
+
+        def wait(self, timeout: float | None = None) -> int:
+            return getattr(self, "returncode", 0)
+
+    processes = [FakeProcess(), FakeProcess()]
+    started_processes: list[FakeProcess] = []
+
+    def fake_popen(command, *, cwd, stdout, stderr, text, bufsize):
+        process = processes.pop(0)
+        started_processes.append(process)
+        return process
+
+    def fake_sleep(_: float) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "_start_process_output_threads", lambda role, process: [])
+
+    exit_code = cli._run_dual_capture(
+        child_specs=(
+            cli.DualCaptureChildSpec("teammate", ("uv", "run", "ambient-memory", "start-teammate")),
+            cli.DualCaptureChildSpec("room-mic", ("uv", "run", "ambient-memory", "start-room-mic")),
+        ),
+        cwd=tmp_path,
+        popen_factory=fake_popen,
+        sleep_fn=fake_sleep,
+    )
+
+    assert exit_code == 130
+    assert len(started_processes) == 2
+    assert all(process.terminated for process in started_processes) is True
 
 
 def test_cli_worker_run_once_wires_dry_run_flag(monkeypatch) -> None:

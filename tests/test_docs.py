@@ -86,6 +86,24 @@ def test_capture_agent_launchd_template_references_wrapper_script() -> None:
     assert "start-teammate" in script_text
 
 
+def test_dual_capture_wrapper_script_checks_both_env_files_and_starts_cli() -> None:
+    script_text = _read("scripts/start-dual-capture.sh")
+
+    assert ".env.teammate" in script_text
+    assert ".env.room-mic" in script_text
+    assert "start-dual-capture" in script_text
+
+
+def test_dual_capture_launchd_template_references_wrapper_script() -> None:
+    text = _read("deploy/launchd/com.ambient-memory.dual-capture.plist")
+
+    assert "start-dual-capture.sh" in text
+    assert "<key>RunAtLoad</key>" in text
+    assert "<key>KeepAlive</key>" in text
+    assert "<key>StandardOutPath</key>" in text
+    assert "<key>StandardErrorPath</key>" in text
+
+
 def test_env_example_mentions_capture_device_name() -> None:
     text = _read(".env.example")
 
@@ -98,10 +116,20 @@ def test_readme_links_teammate_and_ops_machine_setup_docs() -> None:
     assert "docs/teammate-setup.md" in text
     assert "docs/ops-machine-setup.md" in text
     assert "deploy/launchd/com.ambient-memory.capture-agent.plist" in text
+    assert "deploy/launchd/com.ambient-memory.dual-capture.plist" in text
     assert "start-teammate" in text
     assert "start-room-mic" in text
+    assert "start-dual-capture" in text
     assert "start-worker" in text
     assert "start-api" in text
+
+
+def test_ops_machine_setup_doc_covers_dual_capture_mode() -> None:
+    text = _read("docs/ops-machine-setup.md").lower()
+
+    assert "dual capture" in text
+    assert "start-dual-capture" in text
+    assert "com.ambient-memory.dual-capture.plist" in text
 
 
 def test_voiceprint_docs_exist_and_reference_live_enrollment() -> None:

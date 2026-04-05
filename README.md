@@ -16,6 +16,7 @@ Recall-first ambient memory log MVP.
 - `uv run ambient-memory agent run --dry-run --device "Built-in Microphone"`
 - `uv run ambient-memory start-teammate`
 - `uv run ambient-memory start-room-mic`
+- `uv run ambient-memory start-dual-capture`
 - `uv run ambient-memory start-worker`
 - `uv run ambient-memory start-api`
 - `uv run ambient-memory import-recording ./meeting.m4a --start "2026-04-03 09:00"`
@@ -32,5 +33,6 @@ Recall-first ambient memory log MVP.
 - Ops machine setup: `docs/ops-machine-setup.md`
 - Smoke test: `docs/ops/smoke-test.md`
 - Launchd capture-agent template: `deploy/launchd/com.ambient-memory.capture-agent.plist`
+- Launchd dual-capture template: `deploy/launchd/com.ambient-memory.dual-capture.plist`
 - Launchd worker template: `deploy/launchd/com.ambient-memory.worker.plist`
 - Launchd API template: `deploy/launchd/com.ambient-memory.api.plist`

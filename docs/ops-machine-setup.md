@@ -2,16 +2,21 @@
 
 Use this on the central machine that processes uploaded audio.
 
-Goal: run the worker and API continuously, and optionally capture the office mic on the same machine.
+Goal: run the worker and API continuously, and optionally capture the office mic or dual-capture both local mics on the same machine.
 
 ## What This Machine Does
 
-This machine can play one or both roles:
+This machine can play one or more roles:
 
 - ops machine: runs the worker and API
-- office mic machine: records the room microphone and uploads chunks
+- room-mic machine: records the room microphone and uploads chunks
+- dual-capture machine: runs one command and one launchd service while supervising `start-teammate` and `start-room-mic` as separate child capture processes
 
-If the office mic is plugged into this same machine, it can do both.
+Supported capture modes on this machine:
+
+- teammate-only: use `docs/teammate-setup.md`
+- room-mic-only: run `uv run ambient-memory start-room-mic`
+- dual capture: run `uv run ambient-memory start-dual-capture`
 
 ## Prerequisites
 
@@ -78,11 +83,34 @@ Optional:
 - `API_PRESIGN_EXPIRES_IN`
 - `CAPTURE_MAX_BACKLOG_FILES`
 
+If this machine will run dual capture, also create:
+
+```bash
+cp .env.example .env.teammate
+```
+
+Set the teammate-specific values in `.env.teammate`, especially:
+
+- `SOURCE_ID` like `desk-a`
+- `SOURCE_TYPE=teammate`
+- `DEVICE_OWNER` for the local operator
+- `SPOOL_DIR` as an absolute path like `/Users/your-user/Projects/ambient-memory-log/spool/desk-a`
+- `CAPTURE_DEVICE_NAME`
+- `DATABASE_URL`
+- `DATABASE_SSL_ROOT_CERT`
+- `AWS_REGION`
+- `S3_BUCKET`
+
 This doc assumes the shared database and bucket already exist.
 
-## 2. Optional: Capture The Office Mic
+## 2. Optional: Capture Audio On This Machine
 
-If this machine owns the office microphone, validate the device first:
+Choose one capture mode:
+
+- room-mic-only: use `.env.room-mic` and start only `start-room-mic`
+- dual capture: use both `.env.teammate` and `.env.room-mic`, then start `start-dual-capture`
+
+If this machine owns the office microphone, validate the devices first:
 
 ```bash
 cd "$HOME/Projects/ambient-memory-log"
@@ -90,18 +118,38 @@ uv run ambient-memory list-devices
 uv run ambient-memory start-room-mic --dry-run
 ```
 
-Then load the capture agent:
+If you are using dual capture, also validate the teammate mic:
+
+```bash
+cd "$HOME/Projects/ambient-memory-log"
+uv run ambient-memory start-teammate --dry-run
+```
+
+Manual start commands:
+
+```bash
+cd "$HOME/Projects/ambient-memory-log"
+uv run ambient-memory start-room-mic
+uv run ambient-memory start-dual-capture
+```
+
+`start-dual-capture` is the approved one-command UX. It stays orchestration-only and supervises these two child processes under the hood:
+
+- `uv run ambient-memory start-teammate`
+- `uv run ambient-memory start-room-mic`
+
+For always-on dual capture, load the dedicated launchd service:
 
 ```bash
 mkdir -p "$HOME/Library/LaunchAgents"
-cp "$HOME/Projects/ambient-memory-log/deploy/launchd/com.ambient-memory.capture-agent.plist" \
-  "$HOME/Library/LaunchAgents/com.ambient-memory.capture-agent.plist"
+cp "$HOME/Projects/ambient-memory-log/deploy/launchd/com.ambient-memory.dual-capture.plist" \
+  "$HOME/Library/LaunchAgents/com.ambient-memory.dual-capture.plist"
 launchctl bootstrap "gui/$(id -u)" \
-  "$HOME/Library/LaunchAgents/com.ambient-memory.capture-agent.plist"
-launchctl kickstart -k "gui/$(id -u)/com.ambient-memory.capture-agent"
+  "$HOME/Library/LaunchAgents/com.ambient-memory.dual-capture.plist"
+launchctl kickstart -k "gui/$(id -u)/com.ambient-memory.dual-capture"
 ```
 
-If this machine does not own the office mic, skip this section.
+If this machine only runs the room mic, keep using the direct `start-room-mic` command and skip the dual-capture launchd service.
 
 ## 3. Run The Worker
 
@@ -152,11 +200,11 @@ If you run the worker and API manually, watch the terminal output.
 
 If you run them under launchd, use the log paths configured in the plist files.
 
-For office-mic capture on this machine, the capture logs are:
+For dual capture on this machine, the capture logs are:
 
 ```bash
-tail -f /tmp/ambient-memory.capture-agent.stdout.log
-tail -f /tmp/ambient-memory.capture-agent.stderr.log
+tail -f /tmp/ambient-memory.dual-capture.stdout.log
+tail -f /tmp/ambient-memory.dual-capture.stderr.log
 ```
 
 ## 7. Smoke Test
