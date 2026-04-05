@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 import json
 import time
 from dataclasses import dataclass
@@ -112,12 +112,18 @@ class PyannoteClient:
         base_url: str = "https://api.pyannote.ai/v1",
         poll_interval_seconds: float = 1.0,
         max_poll_attempts: int = 60,
+        retry_attempts: int = 3,
+        retry_backoff_seconds: float = 1.0,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.api_key = api_key
         self.transport = transport or StdlibTransport()
         self.base_url = base_url.rstrip("/")
         self.poll_interval_seconds = poll_interval_seconds
         self.max_poll_attempts = max_poll_attempts
+        self.retry_attempts = retry_attempts
+        self.retry_backoff_seconds = retry_backoff_seconds
+        self.sleep = sleep
 
     def enroll_voiceprint(
         self,
@@ -127,9 +133,10 @@ class PyannoteClient:
         filename: str,
     ) -> str:
         media_url = self._upload_media(audio_bytes=audio_bytes, filename=filename, prefix="voiceprints", hint=label)
-        job = self.transport.request_json(
-            "POST",
-            f"{self.base_url}/voiceprint",
+        job = self._request_json_with_retry(
+            "voiceprint create",
+            method="POST",
+            url=f"{self.base_url}/voiceprint",
             headers=self._headers(),
             payload={"url": media_url},
         )
@@ -151,9 +158,10 @@ class PyannoteClient:
         exclusive: bool = True,
     ) -> list[IdentificationMatch]:
         media_url = self._upload_media(audio_bytes=audio_bytes, filename=filename, prefix="identify")
-        job = self.transport.request_json(
-            "POST",
-            f"{self.base_url}/identify",
+        job = self._request_json_with_retry(
+            "identify create",
+            method="POST",
+            url=f"{self.base_url}/identify",
             headers=self._headers(),
             payload={
                 "url": media_url,
@@ -191,9 +199,10 @@ class PyannoteClient:
 
     def wait_for_job(self, job_id: str) -> dict[str, Any]:
         for attempt in range(self.max_poll_attempts):
-            job = self.transport.request_json(
-                "GET",
-                f"{self.base_url}/jobs/{job_id}",
+            job = self._request_json_with_retry(
+                f"job status {job_id}",
+                method="GET",
+                url=f"{self.base_url}/jobs/{job_id}",
                 headers=self._headers(),
             )
             status = str(job.get("status", ""))
@@ -203,25 +212,84 @@ class PyannoteClient:
             if status in {"failed", "canceled"}:
                 raise PyannoteError(f"pyannote job {job_id} ended with status {status}")
             if attempt + 1 < self.max_poll_attempts:
-                time.sleep(self.poll_interval_seconds)
+                self.sleep(self.poll_interval_seconds)
 
         raise PyannoteError(f"pyannote job {job_id} did not complete after {self.max_poll_attempts} polls")
 
     def _upload_media(self, *, audio_bytes: bytes, filename: str, prefix: str, hint: str | None = None) -> str:
         key_hint = filename if hint is None else f"{hint}-{filename}"
         media_url = f"media://{prefix}/{uuid4().hex}-{_sanitize_key(key_hint)}"
-        response = self.transport.request_json(
-            "POST",
-            f"{self.base_url}/media/input",
+        response = self._request_json_with_retry(
+            "media input create",
+            method="POST",
+            url=f"{self.base_url}/media/input",
             headers=self._headers(),
             payload={"url": media_url},
         )
         upload_url = str(response["url"])
-        self.transport.upload_bytes(upload_url, data=audio_bytes)
+        self._upload_bytes_with_retry("media upload", url=upload_url, data=audio_bytes)
         return media_url
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}"}
+
+    def _request_json_with_retry(
+        self,
+        operation_name: str,
+        *,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        payload: dict[str, Any] | None = None,
+        timeout: float = 30.0,
+    ) -> dict[str, Any]:
+        return self._retry_transport(
+            operation_name,
+            lambda: self.transport.request_json(
+                method,
+                url,
+                headers=headers,
+                payload=payload,
+                timeout=timeout,
+            ),
+        )
+
+    def _upload_bytes_with_retry(
+        self,
+        operation_name: str,
+        *,
+        url: str,
+        data: bytes,
+        headers: dict[str, str] | None = None,
+        timeout: float = 30.0,
+    ) -> None:
+        self._retry_transport(
+            operation_name,
+            lambda: self.transport.upload_bytes(
+                url,
+                data=data,
+                headers=headers,
+                timeout=timeout,
+            ),
+        )
+
+    def _retry_transport(self, operation_name: str, operation: Callable[[], Any]) -> Any:
+        attempts = max(1, self.retry_attempts)
+        last_error: PyannoteError | None = None
+
+        for attempt in range(attempts):
+            try:
+                return operation()
+            except PyannoteError as exc:
+                last_error = exc
+                if attempt + 1 >= attempts:
+                    break
+                backoff = self.retry_backoff_seconds * (attempt + 1)
+                if backoff > 0:
+                    self.sleep(backoff)
+
+        assert last_error is not None
+        raise last_error
 
 
 def _sanitize_key(value: str) -> str:

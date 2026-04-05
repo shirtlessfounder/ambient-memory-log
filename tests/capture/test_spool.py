@@ -30,11 +30,30 @@ def write_chunk(path: Path, *, age_seconds: int) -> Path:
     return path
 
 
+def write_empty_chunk(path: Path, *, age_seconds: int) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"")
+    timestamp = datetime.now(UTC).timestamp() - age_seconds
+    os.utime(path, (timestamp, timestamp))
+    return path
+
+
 def test_local_spool_skips_recent_capture_chunks(tmp_path: Path) -> None:
     spool_module = load_spool_module()
     spool = spool_module.LocalSpool(tmp_path, settle_seconds=5)
 
     write_chunk(tmp_path / "chunk-session-20260402T090000.wav", age_seconds=1)
+
+    entries = spool.iter_ready()
+
+    assert entries == []
+
+
+def test_local_spool_skips_empty_placeholder_chunks(tmp_path: Path) -> None:
+    spool_module = load_spool_module()
+    spool = spool_module.LocalSpool(tmp_path, settle_seconds=0)
+
+    write_empty_chunk(tmp_path / "chunk-session-20260402T090000.wav", age_seconds=10)
 
     entries = spool.iter_ready()
 

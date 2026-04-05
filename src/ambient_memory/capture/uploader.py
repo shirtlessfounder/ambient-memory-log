@@ -51,12 +51,15 @@ class ChunkUploader:
         self.segment_seconds = segment_seconds
         self.local_timezone = local_timezone or _load_local_timezone()
 
-    def upload_ready(self) -> UploadBatchResult:
+    def upload_ready(self, *, now: datetime | None = None) -> UploadBatchResult:
+        current_time = now or datetime.now(UTC)
         attempted = 0
         uploaded = 0
         failed = 0
 
         for entry in self.spool.iter_ready():
+            if not self._entry_ready_for_upload(entry, now=current_time):
+                continue
             attempted += 1
             if self._upload_entry(entry):
                 uploaded += 1
@@ -127,6 +130,10 @@ class ChunkUploader:
         if self.device_owner:
             metadata["device_owner"] = self.device_owner
         return metadata
+
+    def _entry_ready_for_upload(self, entry: SpoolEntry, *, now: datetime) -> bool:
+        started_at, _ = self._parse_chunk_file(entry.path)
+        return now >= started_at + timedelta(seconds=self.segment_seconds)
 
     def _parse_chunk_file(self, path: Path) -> tuple[datetime, str | None]:
         match = CHUNK_FILENAME_PATTERN.match(path.name)

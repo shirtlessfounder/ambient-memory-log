@@ -335,7 +335,7 @@ def test_chunk_uploader_uploads_ready_chunks_and_updates_heartbeat(
         local_timezone=ZoneInfo("America/New_York"),
     )
 
-    result = uploader.upload_ready()
+    result = uploader.upload_ready(now=datetime(2026, 4, 2, 13, 1, 0, tzinfo=UTC))
 
     session = session_factory()
     try:
@@ -379,7 +379,7 @@ def test_chunk_uploader_moves_failed_uploads_into_retry_backlog(
         local_timezone=ZoneInfo("America/New_York"),
     )
 
-    result = uploader.upload_ready()
+    result = uploader.upload_ready(now=datetime(2026, 11, 1, 7, 0, 0, tzinfo=UTC))
 
     retry_entries = spool.iter_ready()
 
@@ -388,6 +388,38 @@ def test_chunk_uploader_moves_failed_uploads_into_retry_backlog(
     assert result.failed == 1
     assert retry_entries[0].path.parent == spool.retry_dir
     assert retry_entries[0].attempts == 1
+
+
+def test_chunk_uploader_skips_chunks_younger_than_segment_length(
+    tmp_path: Path,
+    session_factory: sessionmaker[Session],
+) -> None:
+    uploader_module = load_uploader_module()
+    spool_module = load_spool_module()
+    client = RecordingS3Client()
+    spool = spool_module.LocalSpool(tmp_path / "spool", settle_seconds=0)
+    recent_started_at = datetime.now(UTC) - timedelta(seconds=10)
+    write_chunk(spool.root / f"chunk-session-{recent_started_at:%Y%m%dT%H%M%S%z}.wav")
+
+    uploader = uploader_module.ChunkUploader(
+        spool=spool,
+        s3_client=client,
+        session_factory=session_factory,
+        bucket="ambient-memory",
+        source_id="desk-a",
+        source_type="macbook",
+        device_owner="Dylan",
+        segment_seconds=30,
+        local_timezone=UTC,
+    )
+
+    result = uploader.upload_ready(now=recent_started_at + timedelta(seconds=10))
+
+    assert result.attempted == 0
+    assert result.uploaded == 0
+    assert result.failed == 0
+    assert client.put_calls == []
+    assert list(spool.root.glob("*.wav"))
 
 
 def test_chunk_uploader_keeps_same_second_cross_run_chunks_distinct(
@@ -412,7 +444,7 @@ def test_chunk_uploader_keeps_same_second_cross_run_chunks_distinct(
         local_timezone=ZoneInfo("America/New_York"),
     )
 
-    result = uploader.upload_ready()
+    result = uploader.upload_ready(now=datetime(2026, 11, 1, 7, 0, 0, tzinfo=UTC))
 
     session = session_factory()
     try:
@@ -459,7 +491,7 @@ def test_chunk_uploader_parses_offset_timestamps_across_dst_fallback(
         local_timezone=ZoneInfo("America/New_York"),
     )
 
-    result = uploader.upload_ready()
+    result = uploader.upload_ready(now=datetime(2026, 11, 1, 7, 0, 0, tzinfo=UTC))
 
     session = session_factory()
     try:

@@ -38,13 +38,15 @@ class LocalSpool:
         self.ensure()
         current = (now or datetime.now(UTC)).timestamp()
         entries: list[SpoolEntry] = []
-
         candidates = self._audio_candidates()
         if self._retry_file_count() >= self.max_backlog_files:
             candidates = [candidate for candidate in candidates if candidate.parent == self.retry_dir]
 
         for candidate in sorted(candidates, key=lambda path: path.stat().st_mtime):
-            if current - candidate.stat().st_mtime < self.settle_seconds:
+            stat_result = candidate.stat()
+            if stat_result.st_size == 0:
+                continue
+            if current - stat_result.st_mtime < self.settle_seconds:
                 continue
             entries.append(self._load_entry(candidate))
 
