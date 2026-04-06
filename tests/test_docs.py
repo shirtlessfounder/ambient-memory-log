@@ -61,6 +61,7 @@ def test_teammate_setup_doc_covers_install_validation_voiceprint_and_service_flo
     assert "voiceprint-live" in text
     assert "launchctl bootstrap" in text
     assert "launchctl bootout" in text
+    assert "ctrl-c" in text.lower()
 
 
 def test_ops_machine_setup_doc_covers_worker_api_and_optional_room_capture() -> None:
@@ -146,6 +147,8 @@ def test_ops_machine_setup_doc_covers_dual_capture_mode() -> None:
     assert "dual capture" in text
     assert "start-dual-capture" in text
     assert "com.ambient-memory.dual-capture.plist" in text
+    assert "launchctl bootout" in text
+    assert "ctrl-c" in text
 
 
 def test_voiceprint_docs_exist_and_reference_live_enrollment() -> None:

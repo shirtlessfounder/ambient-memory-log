@@ -139,6 +139,8 @@ launchctl bootout "gui/$(id -u)" \
   "$HOME/Library/LaunchAgents/com.ambient-memory.capture-agent.plist"
 ```
 
+If you started teammate capture manually in a terminal instead of `launchd`, stop it with `Ctrl-C` in that terminal.
+
 Restart after editing `.env`:
 
 ```bash

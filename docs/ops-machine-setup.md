@@ -157,6 +157,17 @@ launchctl kickstart -k "gui/$(id -u)/com.ambient-memory.dual-capture"
 
 If this machine only runs the room mic, keep using the direct `start-room-mic` command and skip the dual-capture launchd service.
 
+## Stop Capture On This Machine
+
+If you started room capture or dual capture manually in a terminal, stop it with `Ctrl-C` in that terminal.
+
+If you loaded dual capture under `launchd`, stop it with:
+
+```bash
+launchctl bootout "gui/$(id -u)" \
+  "$HOME/Library/LaunchAgents/com.ambient-memory.dual-capture.plist"
+```
+
 ## 3. Run The Worker
 
 Manual start:
@@ -165,6 +176,8 @@ Manual start:
 cd "$HOME/Projects/ambient-memory-log"
 uv run ambient-memory start-worker
 ```
+
+If you started the worker manually in a terminal, stop it with `Ctrl-C`.
 
 What it does:
 
@@ -183,6 +196,8 @@ cd "$HOME/Projects/ambient-memory-log"
 uv run ambient-memory start-api
 ```
 
+If you started the API manually in a terminal, stop it with `Ctrl-C`.
+
 What it does:
 
 - serves `/search`
@@ -199,6 +214,8 @@ The repo includes templates for long-running services:
 Before loading them, replace the placeholder paths and environment values inside each plist.
 
 Then copy them into `~/Library/LaunchAgents/` and load them with `launchctl bootstrap`.
+
+If you loaded the worker or API under `launchd`, stop them with `launchctl bootout` on the corresponding plist path in `~/Library/LaunchAgents/`.
 
 ## 6. Check Logs
 
