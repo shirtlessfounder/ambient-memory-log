@@ -2,7 +2,7 @@ from ambient_memory.pipeline.speaker_matching import SpeakerMatch, choose_speake
 
 
 def test_local_source_biases_to_device_owner_when_confident() -> None:
-    match = choose_speaker(source_owner="dylan", pyannote_match="dylan", confidence=81)
+    match = choose_speaker(source_type="macbook", source_owner="dylan", pyannote_match="dylan", confidence=81)
 
     assert match == SpeakerMatch(
         speaker_name="dylan",
@@ -14,7 +14,7 @@ def test_local_source_biases_to_device_owner_when_confident() -> None:
 
 
 def test_low_confidence_room_segment_remains_uncertain() -> None:
-    match = choose_speaker(source_owner=None, pyannote_match="dylan", confidence=32)
+    match = choose_speaker(source_type="room", source_owner=None, pyannote_match="dylan", confidence=32)
 
     assert match == SpeakerMatch(
         speaker_name=None,
@@ -26,12 +26,29 @@ def test_low_confidence_room_segment_remains_uncertain() -> None:
 
 
 def test_conflicting_local_owner_and_pyannote_match_stays_unnamed() -> None:
-    match = choose_speaker(source_owner="dylan", pyannote_match="sam", confidence=88)
+    match = choose_speaker(source_type="macbook", source_owner="dylan", pyannote_match="sam", confidence=88)
 
     assert match == SpeakerMatch(
         speaker_name=None,
         confidence=0.58,
         source_owner="dylan",
         pyannote_match="sam",
+        pyannote_confidence=0.88,
+    )
+
+
+def test_room_source_does_not_treat_device_owner_as_a_person_identity() -> None:
+    match = choose_speaker(
+        source_type="room",
+        source_owner="conference-room",
+        pyannote_match="dylan",
+        confidence=88,
+    )
+
+    assert match == SpeakerMatch(
+        speaker_name="dylan",
+        confidence=0.88,
+        source_owner="conference-room",
+        pyannote_match="dylan",
         pyannote_confidence=0.88,
     )

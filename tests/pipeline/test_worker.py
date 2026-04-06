@@ -544,6 +544,85 @@ def test_pipeline_worker_matches_speakers_by_time_overlap_not_label_namespace(
     assert canonical.speaker_name == "Dylan"
 
 
+def test_pipeline_worker_allows_room_source_device_owner_metadata_without_suppressing_human_match(
+    session_factory: sessionmaker[Session],
+) -> None:
+    session = session_factory()
+    try:
+        session.add_all(
+            [
+                Source(id="room-1", source_type="room", device_owner="conference-room"),
+                Voiceprint(
+                    speaker_label="Dylan",
+                    provider="pyannote",
+                    provider_voiceprint_id="vp-1",
+                    source_audio_key="voiceprints/dylan.wav",
+                ),
+                AudioChunk(
+                    id="chunk-room",
+                    source_id="room-1",
+                    s3_bucket="ambient-memory",
+                    s3_key="raw-audio/room-1/chunk-room.wav",
+                    status="uploaded",
+                    started_at=datetime(2026, 4, 2, 13, 0, 0, tzinfo=UTC),
+                    ended_at=datetime(2026, 4, 2, 13, 0, 30, tzinfo=UTC),
+                ),
+            ]
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    room_audio = b"room-audio"
+    worker = PipelineWorker(
+        session_factory=session_factory,
+        s3_client=FakeS3Client({"raw-audio/room-1/chunk-room.wav": room_audio}),
+        deepgram_client=FakeDeepgramClient(
+            {
+                room_audio: {
+                    "results": {
+                        "utterances": [
+                            {
+                                "id": "utt-room",
+                                "start": 1.0,
+                                "end": 3.0,
+                                "confidence": 0.84,
+                                "speaker": 0,
+                                "speaker_confidence": 0.74,
+                                "transcript": "Hello there.",
+                            }
+                        ]
+                    }
+                }
+            }
+        ),
+        pyannote_client=FakePyannoteClient(
+            {
+                room_audio: [
+                    IdentificationMatch(
+                        speaker="speaker#room-17",
+                        match="Dylan",
+                        confidence={"Dylan": 0.88},
+                        start_seconds=0.8,
+                        end_seconds=3.2,
+                    )
+                ]
+            }
+        ),
+    )
+
+    result = worker.run_once()
+
+    session = session_factory()
+    try:
+        canonical = session.scalars(select(CanonicalUtterance)).one()
+    finally:
+        session.close()
+
+    assert result.processed_chunks == 1
+    assert canonical.speaker_name == "Dylan"
+
+
 def test_pipeline_worker_run_once_dry_run_reports_pending_chunks_without_mutation(
     session_factory: sessionmaker[Session],
 ) -> None:

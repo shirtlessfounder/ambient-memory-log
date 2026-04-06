@@ -42,6 +42,7 @@ class WorkerRuntimeConfig:
 class PendingChunk:
     id: str
     source_id: str
+    source_type: str | None
     source_owner: str | None
     s3_bucket: str
     s3_key: str
@@ -152,6 +153,7 @@ class PipelineWorker:
             chunk.id: PendingChunk(
                 id=chunk.id,
                 source_id=chunk.source_id,
+                source_type=source.source_type if source is not None else None,
                 source_owner=source.device_owner if source is not None else None,
                 s3_bucket=chunk.s3_bucket,
                 s3_key=chunk.s3_key,
@@ -192,6 +194,7 @@ class PipelineWorker:
                         chunk_started_at=chunk.started_at,
                     )
                     speaker_name, speaker_confidence = self._resolve_speaker(
+                        source_type=chunk.source_type,
                         source_owner=chunk.source_owner,
                         match=match,
                     )
@@ -265,6 +268,7 @@ class PipelineWorker:
     def _resolve_speaker(
         self,
         *,
+        source_type: str | None,
         source_owner: str | None,
         match: IdentificationMatch | None,
     ) -> tuple[str | None, float | None]:
@@ -273,6 +277,7 @@ class PipelineWorker:
 
         confidence = _match_confidence(match)
         resolved = choose_speaker(
+            source_type=source_type,
             source_owner=source_owner,
             pyannote_match=match.match,
             confidence=confidence,

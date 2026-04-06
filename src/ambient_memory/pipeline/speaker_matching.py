@@ -19,12 +19,14 @@ class SpeakerMatch:
 
 def choose_speaker(
     *,
+    source_type: str | None,
     source_owner: str | None,
     pyannote_match: str | None,
     confidence: float | int | None,
 ) -> SpeakerMatch:
     normalized_confidence = _normalize_confidence(confidence)
     combined_confidence = _combine_confidence(
+        source_type=source_type,
         source_owner=source_owner,
         pyannote_match=pyannote_match,
         pyannote_confidence=normalized_confidence,
@@ -32,6 +34,7 @@ def choose_speaker(
 
     return SpeakerMatch(
         speaker_name=_final_speaker_name(
+            source_type=source_type,
             source_owner=source_owner,
             pyannote_match=pyannote_match,
             combined_confidence=combined_confidence,
@@ -56,13 +59,14 @@ def _normalize_confidence(confidence: float | int | None) -> float | None:
 
 def _combine_confidence(
     *,
+    source_type: str | None,
     source_owner: str | None,
     pyannote_match: str | None,
     pyannote_confidence: float | None,
 ) -> float:
     combined = pyannote_confidence or 0.0
 
-    if source_owner and pyannote_match:
+    if _uses_source_owner_constraint(source_type) and source_owner and pyannote_match:
         if _labels_match(source_owner, pyannote_match):
             combined += SOURCE_OWNER_BONUS
         else:
@@ -73,6 +77,7 @@ def _combine_confidence(
 
 def _final_speaker_name(
     *,
+    source_type: str | None,
     source_owner: str | None,
     pyannote_match: str | None,
     combined_confidence: float,
@@ -80,10 +85,16 @@ def _final_speaker_name(
     if not pyannote_match or combined_confidence < MATCH_THRESHOLD:
         return None
 
-    if source_owner and not _labels_match(source_owner, pyannote_match):
+    if _uses_source_owner_constraint(source_type) and source_owner and not _labels_match(source_owner, pyannote_match):
         return None
 
-    return source_owner or pyannote_match
+    if _uses_source_owner_constraint(source_type):
+        return source_owner or pyannote_match
+    return pyannote_match
+
+
+def _uses_source_owner_constraint(source_type: str | None) -> bool:
+    return source_type != "room"
 
 
 def _labels_match(left: str, right: str) -> bool:
