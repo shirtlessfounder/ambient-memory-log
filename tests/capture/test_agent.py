@@ -1,10 +1,12 @@
 import logging
 from pathlib import Path
+import signal
 from types import SimpleNamespace
 
 from pydantic import ValidationError
 import pytest
 
+from ambient_memory.capture import agent as agent_module
 from ambient_memory.capture.agent import AgentRuntimeConfig, CaptureAgent, load_runtime_config, run_capture_agent
 from ambient_memory.capture.device_discovery import AudioDevice
 from ambient_memory.capture.spool import SpoolBacklogFullError
@@ -234,6 +236,14 @@ class DrainingUploader:
         return UploadBatchResult(attempted=0, uploaded=0, failed=0)
 
 
+class QuietUploader:
+    def __init__(self, spool: StubSpool) -> None:
+        self.spool = spool
+
+    def upload_ready(self) -> UploadBatchResult:
+        return UploadBatchResult(attempted=0, uploaded=0, failed=0)
+
+
 def _build_agent(uploader) -> CaptureAgent:
     return CaptureAgent(
         config=AgentRuntimeConfig(
@@ -304,3 +314,44 @@ def test_capture_agent_pauses_and_resumes_capture_based_on_backlog_pressure(
     assert "stop" in events
     assert "start" in events
     assert events.index("start") > events.index("stop")
+
+
+def test_capture_agent_stops_capture_when_sigterm_is_received(monkeypatch) -> None:
+    spool = StubSpool(full=False, count=0, max_backlog_files=4)
+    agent = _build_agent(QuietUploader(spool))
+    events: list[str] = []
+    registered_handlers: dict[int, object] = {}
+    previous_handler = object()
+
+    monkeypatch.setattr(agent, "_ensure_capture_running", lambda: events.append("start"))
+    monkeypatch.setattr(agent, "_stop_capture", lambda: events.append("stop"))
+    monkeypatch.setattr(agent, "_maybe_heartbeat", lambda *, uploaded: None)
+    def fake_signal(signum: int, handler: object) -> object:
+        registered_handlers[signum] = handler
+        return previous_handler
+
+    monkeypatch.setattr(
+        agent_module,
+        "signal",
+        SimpleNamespace(
+            SIGINT=signal.SIGINT,
+            SIGTERM=signal.SIGTERM,
+            getsignal=lambda signum: previous_handler,
+            signal=fake_signal,
+        ),
+        raising=False,
+    )
+
+    def fake_sleep(_: int) -> None:
+        handler = registered_handlers.get(signal.SIGTERM)
+        assert handler is not None, "SIGTERM handler was not registered"
+        handler(signal.SIGTERM, None)
+
+    monkeypatch.setattr("ambient_memory.capture.agent.sleep", fake_sleep)
+
+    agent.run()
+
+    assert "start" in events
+    assert events[-1] == "stop"
+    assert registered_handlers[signal.SIGINT] is previous_handler
+    assert registered_handlers[signal.SIGTERM] is previous_handler

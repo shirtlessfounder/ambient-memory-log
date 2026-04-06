@@ -168,6 +168,8 @@ launchctl bootout "gui/$(id -u)" \
   "$HOME/Library/LaunchAgents/com.ambient-memory.dual-capture.plist"
 ```
 
+That cleanly stops the capture supervisor and the underlying `ffmpeg` recorder processes for both capture roles.
+
 ## 3. Run The Worker
 
 Manual start:

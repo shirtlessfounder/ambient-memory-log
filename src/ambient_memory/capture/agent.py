@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, time
 import logging
 from pathlib import Path
+import signal
 import subprocess
 from time import sleep
 from uuid import uuid4
@@ -18,6 +19,12 @@ from ambient_memory.logging import configure_logging
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+class CaptureAgentShutdown(Exception):
+    def __init__(self, signum: int) -> None:
+        self.signum = signum
+        super().__init__(f"capture agent received signal {signum}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +71,14 @@ class CaptureAgent:
         active_start = parse_local_time(self.config.active_start_local)
         active_end = parse_local_time(self.config.active_end_local)
         self.spool.ensure()
+        previous_handlers: list[tuple[int, object]] = []
+
+        def handle_signal(signum: int, _frame: object) -> None:
+            raise CaptureAgentShutdown(signum)
+
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous_handlers.append((signum, signal.getsignal(signum)))
+            signal.signal(signum, handle_signal)
 
         try:
             while True:
@@ -81,7 +96,11 @@ class CaptureAgent:
                 sleep(self.poll_seconds)
         except KeyboardInterrupt:
             LOGGER.info("capture agent interrupted")
+        except CaptureAgentShutdown as error:
+            LOGGER.info("capture agent received signal %s", error.signum)
         finally:
+            for signum, previous_handler in previous_handlers:
+                signal.signal(signum, previous_handler)
             self._stop_capture()
 
     def _ensure_capture_running(self) -> None:
