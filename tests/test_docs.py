@@ -131,6 +131,15 @@ def test_readme_links_teammate_and_ops_machine_setup_docs() -> None:
     assert "start-api" in text
 
 
+def test_readme_explains_launchd_background_startup() -> None:
+    text = _read("README.md").lower()
+
+    assert "launchd" in text
+    assert "background" in text
+    assert "terminal" in text
+    assert "login" in text
+
+
 def test_ops_machine_setup_doc_covers_dual_capture_mode() -> None:
     text = _read("docs/ops-machine-setup.md").lower()
 
@@ -166,9 +175,25 @@ def test_teammate_setup_doc_mentions_conservative_silence_filter_behavior() -> N
     assert "quiet speech" in text
 
 
+def test_teammate_setup_doc_explains_one_time_launchd_setup() -> None:
+    text = _read("docs/teammate-setup.md").lower()
+
+    assert "one-time" in text
+    assert "terminal" in text
+    assert "login" in text
+
+
 def test_ops_machine_setup_doc_mentions_conservative_silence_filter_behavior() -> None:
     text = _read("docs/ops-machine-setup.md").lower()
 
     assert "silent chunk" in text
     assert "conservative" in text
     assert "quiet speech" in text
+
+
+def test_ops_machine_setup_doc_explains_launchd_as_background_service_flow() -> None:
+    text = _read("docs/ops-machine-setup.md").lower()
+
+    assert "one-time" in text
+    assert "launchd" in text
+    assert "terminal" in text

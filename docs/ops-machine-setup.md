@@ -4,6 +4,8 @@ Use this on the central machine that processes uploaded audio.
 
 Goal: run the worker and API continuously, and optionally capture the office mic or dual-capture both local mics on the same machine.
 
+Daily vibe: if you use `launchd`, this is also a one-time setup. Once the worker, API, and optional capture launch agents are loaded, macOS starts them on login and keeps them running in the background. You do not need to leave a Terminal window open every day unless you are debugging.
+
 ## What This Machine Does
 
 This machine can play one or more roles:

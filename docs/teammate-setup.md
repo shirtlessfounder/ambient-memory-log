@@ -6,6 +6,8 @@ Goal: get one laptop recording, chunking, and uploading in the background with t
 
 This doc is only for teammate laptops.
 
+Daily vibe: this is a one-time setup. After you load the `launchd` service, macOS starts capture automatically on login and keeps it running in the background. You do not need to keep Terminal open or run a command every morning.
+
 It does not cover:
 
 - worker startup

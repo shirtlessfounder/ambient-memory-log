@@ -10,6 +10,8 @@ Recall-first ambient memory log MVP.
 
 `CAPTURE_MAX_BACKLOG_FILES` defaults to `2048` and must be a positive integer so the capture agent can tolerate a longer offline window before it pauses local capture and focuses on draining backlog uploads.
 
+For normal day-to-day use, the intended setup is `launchd` on macOS. That means you do the setup once, then macOS keeps the service running in the background. Teammates should not need to keep Terminal open or re-run commands every morning. The service starts again on login.
+
 ## Commands
 
 - `uv run ambient-memory list-devices`
