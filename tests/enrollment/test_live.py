@@ -169,6 +169,9 @@ def test_live_enrollment_rerecords_before_enrolling(tmp_path: Path) -> None:
         "Recording. Press Enter to stop: ",
         "Press Enter to enroll, type r to re-record, or q to cancel: ",
     ]
+    assert "Ambient Memory voiceprint enrollment. My name is DYLAN and I am speaking in my normal working voice." in (
+        calls["output"]
+    )
     assert any("ambient memory" in message.lower() for message in calls["output"])
     assert session.committed is True
 

@@ -30,6 +30,13 @@ class LiveEnrollmentResult:
     replaced_existing: bool
 
 
+def build_recitation_script(label: str) -> list[str]:
+    personalized_first_line = (
+        f"Ambient Memory voiceprint enrollment. My name is {label} and I am speaking in my normal working voice."
+    )
+    return [personalized_first_line, *RECITATION_SCRIPT[1:]]
+
+
 def build_live_record_command(
     *,
     device: AudioDevice,
@@ -89,7 +96,7 @@ def run_live_voiceprint_enrollment(
     output(f"Recording voiceprint for {canonical_label}")
     output(f"Using device: {device.name}")
     output("Read this aloud in a quiet room:")
-    for line in RECITATION_SCRIPT:
+    for line in build_recitation_script(canonical_label):
         output(line)
 
     attempt = 0

@@ -463,7 +463,14 @@ def test_cli_enroll_voiceprint_creates_voiceprint(monkeypatch, tmp_path) -> None
         }
         return object()
 
-    monkeypatch.setattr(cli, "EnrollmentSettings", lambda: FakeEnrollmentSettings())
+    def fake_load_settings(settings_type: object, *, env_file: str | None = None) -> FakeEnrollmentSettings:
+        calls["load_settings"] = {
+            "settings_type": settings_type,
+            "env_file": env_file,
+        }
+        return FakeEnrollmentSettings()
+
+    monkeypatch.setattr(cli, "load_settings", fake_load_settings)
     monkeypatch.setattr(cli, "PyannoteClient", FakeClient)
     monkeypatch.setattr(cli, "session_scope", fake_session_scope)
     monkeypatch.setattr(cli, "create_voiceprint", fake_create_voiceprint)
@@ -476,6 +483,10 @@ def test_cli_enroll_voiceprint_creates_voiceprint(monkeypatch, tmp_path) -> None
     assert calls["label"] == "Dylan"
     assert calls["audio_bytes"] == b"audio-bytes"
     assert calls["filename"] == "sample.wav"
+    assert calls["load_settings"] == {
+        "settings_type": cli.EnrollmentSettings,
+        "env_file": ".env.teammate",
+    }
     assert calls["saved"] == {
         "session": calls["saved"]["session"],
         "speaker_label": "Dylan",
@@ -841,21 +852,41 @@ def test_cli_enroll_voiceprint_live_wires_args(monkeypatch) -> None:
 
     calls: dict[str, object] = {}
 
+    class FakeEnrollmentSettings:
+        pyannote_api_key = "secret"
+        database_url = "postgresql://example"
+        database_ssl_root_cert = None
+
     class Result:
         speaker_label = "Dylan"
         sample_path = "/tmp/dylan.wav"
         replaced_existing = True
 
-    def fake_run_live_voiceprint_enrollment(*, label: str, device_selection: str | None, ffmpeg_binary: str):
+    def fake_load_settings(settings_type: object, *, env_file: str | None = None) -> FakeEnrollmentSettings:
+        calls["load_settings"] = {
+            "settings_type": settings_type,
+            "env_file": env_file,
+        }
+        return FakeEnrollmentSettings()
+
+    def fake_run_live_voiceprint_enrollment(
+        *,
+        label: str,
+        device_selection: str | None,
+        ffmpeg_binary: str,
+        settings: object,
+    ):
         calls.update(
             {
                 "label": label,
                 "device_selection": device_selection,
                 "ffmpeg_binary": ffmpeg_binary,
+                "settings": settings,
             }
         )
         return Result()
 
+    monkeypatch.setattr(cli, "load_settings", fake_load_settings)
     monkeypatch.setattr(cli, "run_live_voiceprint_enrollment", fake_run_live_voiceprint_enrollment)
 
     result = runner.invoke(
@@ -865,10 +896,16 @@ def test_cli_enroll_voiceprint_live_wires_args(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert calls == {
+        "load_settings": {
+            "settings_type": cli.EnrollmentSettings,
+            "env_file": ".env.teammate",
+        },
         "label": "Dylan",
         "device_selection": "Built-in Microphone",
         "ffmpeg_binary": "ffmpeg",
+        "settings": calls["settings"],
     }
+    assert isinstance(calls["settings"], FakeEnrollmentSettings)
     assert "Updated voiceprint for Dylan" in result.output
 
 

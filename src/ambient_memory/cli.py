@@ -14,7 +14,7 @@ from typer.testing import CliRunner
 
 from ambient_memory.api.app import run_api_server
 from ambient_memory.capture.agent import list_local_audio_devices, run_capture_agent
-from ambient_memory.config import DatabaseSettings, EnrollmentSettings
+from ambient_memory.config import DatabaseSettings, EnrollmentSettings, load_settings
 from ambient_memory.db import count_audio_chunks_for_source, create_voiceprint, session_scope
 from ambient_memory.enrollment.live import run_live_voiceprint_enrollment
 from ambient_memory.importing.recordings import derive_source_id, run_recording_import
@@ -43,6 +43,7 @@ app.add_typer(enroll_app, name="enroll")
 
 WORKER_ESTIMATE_LOW_SECONDS_PER_CHUNK = 7.0
 WORKER_ESTIMATE_HIGH_SECONDS_PER_CHUNK = 13.5
+ENROLLMENT_ENV_FILE = ".env.teammate"
 
 
 @dataclass(frozen=True, slots=True)
@@ -504,7 +505,7 @@ def enroll_voiceprint(
     ),
 ) -> None:
     """Enroll a reusable speaker voiceprint."""
-    settings = EnrollmentSettings()
+    settings = load_settings(EnrollmentSettings, env_file=ENROLLMENT_ENV_FILE)
     client = PyannoteClient(api_key=settings.pyannote_api_key)
     voiceprint_id = client.enroll_voiceprint(
         label=label,
@@ -530,10 +531,12 @@ def enroll_voiceprint_live(
     ffmpeg_binary: str = Option("ffmpeg", help="Path to the ffmpeg binary."),
 ) -> None:
     """Record, review, and enroll a live speaker voiceprint."""
+    settings = load_settings(EnrollmentSettings, env_file=ENROLLMENT_ENV_FILE)
     result = run_live_voiceprint_enrollment(
         label=label,
         device_selection=device_selection,
         ffmpeg_binary=ffmpeg_binary,
+        settings=settings,
     )
     verb = "Updated" if result.replaced_existing else "Created"
     print(f"{verb} voiceprint for {result.speaker_label}")
