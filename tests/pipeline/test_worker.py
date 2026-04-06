@@ -580,3 +580,68 @@ def test_pipeline_worker_run_once_dry_run_reports_pending_chunks_without_mutatio
     assert deepgram_client.calls == []
     assert pyannote_client.calls == []
     assert s3_client.calls == []
+
+
+def test_pipeline_worker_prioritizes_recently_uploaded_windows_over_older_backlog(
+    session_factory: sessionmaker[Session],
+) -> None:
+    session = session_factory()
+    try:
+        session.add_all(
+            [
+                Source(id="desk-a", source_type="macbook", device_owner="Dylan"),
+                AudioChunk(
+                    id="chunk-old",
+                    source_id="desk-a",
+                    s3_bucket="ambient-memory",
+                    s3_key="raw-audio/desk-a/chunk-old.wav",
+                    status="uploaded",
+                    started_at=datetime(2026, 4, 5, 23, 0, 0, tzinfo=UTC),
+                    ended_at=datetime(2026, 4, 5, 23, 0, 30, tzinfo=UTC),
+                    uploaded_at=datetime(2026, 4, 6, 16, 52, 0, tzinfo=UTC),
+                ),
+                AudioChunk(
+                    id="chunk-recent",
+                    source_id="desk-a",
+                    s3_bucket="ambient-memory",
+                    s3_key="raw-audio/desk-a/chunk-recent.wav",
+                    status="uploaded",
+                    started_at=datetime(2026, 4, 6, 16, 50, 0, tzinfo=UTC),
+                    ended_at=datetime(2026, 4, 6, 16, 50, 30, tzinfo=UTC),
+                    uploaded_at=datetime(2026, 4, 6, 16, 51, 0, tzinfo=UTC),
+                ),
+            ]
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    old_audio = b"old-audio"
+    recent_audio = b"recent-audio"
+    deepgram_client = FakeDeepgramClient(
+        {
+            old_audio: {"results": {"utterances": []}},
+            recent_audio: {"results": {"utterances": []}},
+        }
+    )
+    worker = PipelineWorker(
+        session_factory=session_factory,
+        s3_client=FakeS3Client(
+            {
+                "raw-audio/desk-a/chunk-old.wav": old_audio,
+                "raw-audio/desk-a/chunk-recent.wav": recent_audio,
+            }
+        ),
+        deepgram_client=deepgram_client,
+        pyannote_client=FakePyannoteClient(
+            {
+                old_audio: [],
+                recent_audio: [],
+            }
+        ),
+    )
+
+    result = worker.run_once()
+
+    assert result.processed_chunks == 2
+    assert deepgram_client.calls == [recent_audio, old_audio]

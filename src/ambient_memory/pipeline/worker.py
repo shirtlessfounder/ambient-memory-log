@@ -118,7 +118,7 @@ class PipelineWorker:
             LOGGER.info("worker interrupted")
 
     def _group_windows(self, pending_chunks: dict[str, PendingChunk]):
-        return group_processing_windows(
+        windows = group_processing_windows(
             WindowChunk(
                 chunk_id=chunk.id,
                 source_id=chunk.source_id,
@@ -126,6 +126,14 @@ class PipelineWorker:
                 ended_at=chunk.ended_at,
             )
             for chunk in pending_chunks.values()
+        )
+        return sorted(
+            windows,
+            key=lambda window: (
+                window.started_at,
+                window.ended_at,
+            ),
+            reverse=True,
         )
 
     def _load_pending_chunks(self) -> dict[str, PendingChunk]:
