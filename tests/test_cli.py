@@ -197,7 +197,8 @@ def test_run_dual_capture_stops_sibling_when_child_exits(monkeypatch, tmp_path: 
     from ambient_memory import cli
 
     class FakeProcess:
-        def __init__(self, returncodes: list[int | None]) -> None:
+        def __init__(self, returncodes: list[int | None], *, pid: int) -> None:
+            self.pid = pid
             self.returncodes = list(returncodes)
             self.stdout = io.StringIO("")
             self.stderr = io.StringIO("")
@@ -223,14 +224,17 @@ def test_run_dual_capture_stops_sibling_when_child_exits(monkeypatch, tmp_path: 
         def wait(self, timeout: float | None = None) -> int:
             return getattr(self, "returncode", 0)
 
-    processes = [FakeProcess([None, None]), FakeProcess([7])]
-    popen_calls: list[tuple[tuple[str, ...], str]] = []
+    processes = [FakeProcess([None, None], pid=101), FakeProcess([7], pid=202)]
+    popen_calls: list[tuple[tuple[str, ...], str, bool]] = []
+    process_group_signals: list[tuple[int, int]] = []
 
-    def fake_popen(command, *, cwd, stdout, stderr, text, bufsize):
-        popen_calls.append((tuple(command), cwd))
+    def fake_popen(command, *, cwd, stdout, stderr, text, bufsize, start_new_session):
+        popen_calls.append((tuple(command), cwd, start_new_session))
         return processes[len(popen_calls) - 1]
 
     monkeypatch.setattr(cli, "_start_process_output_threads", lambda role, process: [])
+    monkeypatch.setattr(cli.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(cli.os, "killpg", lambda pgid, signum: process_group_signals.append((pgid, signum)))
 
     exit_code = cli._run_dual_capture(
         child_specs=(
@@ -244,10 +248,10 @@ def test_run_dual_capture_stops_sibling_when_child_exits(monkeypatch, tmp_path: 
 
     assert exit_code == 7
     assert popen_calls == [
-        (("uv", "run", "ambient-memory", "start-teammate"), str(tmp_path)),
-        (("uv", "run", "ambient-memory", "start-room-mic"), str(tmp_path)),
+        (("uv", "run", "ambient-memory", "start-teammate"), str(tmp_path), True),
+        (("uv", "run", "ambient-memory", "start-room-mic"), str(tmp_path), True),
     ]
-    assert processes[0].terminated is True
+    assert process_group_signals == [(101, cli.signal.SIGTERM)]
     assert processes[0].killed is False
 
 
@@ -255,7 +259,8 @@ def test_run_dual_capture_stops_both_children_on_interrupt(monkeypatch, tmp_path
     from ambient_memory import cli
 
     class FakeProcess:
-        def __init__(self) -> None:
+        def __init__(self, *, pid: int) -> None:
+            self.pid = pid
             self.stdout = io.StringIO("")
             self.stderr = io.StringIO("")
             self.terminated = False
@@ -275,18 +280,22 @@ def test_run_dual_capture_stops_both_children_on_interrupt(monkeypatch, tmp_path
         def wait(self, timeout: float | None = None) -> int:
             return getattr(self, "returncode", 0)
 
-    processes = [FakeProcess(), FakeProcess()]
+    processes = [FakeProcess(pid=101), FakeProcess(pid=202)]
     started_processes: list[FakeProcess] = []
+    process_group_signals: list[tuple[int, int]] = []
 
-    def fake_popen(command, *, cwd, stdout, stderr, text, bufsize):
+    def fake_popen(command, *, cwd, stdout, stderr, text, bufsize, start_new_session):
         process = processes.pop(0)
         started_processes.append(process)
+        assert start_new_session is True
         return process
 
     def fake_sleep(_: float) -> None:
         raise KeyboardInterrupt
 
     monkeypatch.setattr(cli, "_start_process_output_threads", lambda role, process: [])
+    monkeypatch.setattr(cli.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(cli.os, "killpg", lambda pgid, signum: process_group_signals.append((pgid, signum)))
 
     exit_code = cli._run_dual_capture(
         child_specs=(
@@ -300,7 +309,40 @@ def test_run_dual_capture_stops_both_children_on_interrupt(monkeypatch, tmp_path
 
     assert exit_code == 130
     assert len(started_processes) == 2
-    assert all(process.terminated for process in started_processes) is True
+    assert process_group_signals == [
+        (101, cli.signal.SIGTERM),
+        (202, cli.signal.SIGTERM),
+    ]
+
+
+def test_stop_child_processes_targets_process_groups(monkeypatch) -> None:
+    from ambient_memory import cli
+
+    class FakeProcess:
+        def __init__(self, *, pid: int) -> None:
+            self.pid = pid
+            self.returncode = None
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def terminate(self) -> None:
+            raise AssertionError("terminate should not be used when process group signaling succeeds")
+
+        def kill(self) -> None:
+            raise AssertionError("kill should not be used when process group signaling succeeds")
+
+        def wait(self, timeout: float | None = None) -> int:
+            self.returncode = -15
+            return self.returncode
+
+    signals: list[tuple[int, int]] = []
+    monkeypatch.setattr(cli.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(cli.os, "killpg", lambda pgid, signum: signals.append((pgid, signum)))
+
+    cli._stop_child_processes([FakeProcess(pid=321)])
+
+    assert signals == [(321, cli.signal.SIGTERM)]
 
 
 def test_cli_worker_run_once_wires_dry_run_flag(monkeypatch) -> None:

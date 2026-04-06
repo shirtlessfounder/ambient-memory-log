@@ -1,3 +1,4 @@
+import os
 import signal
 import subprocess
 import sys
@@ -216,8 +217,9 @@ def _stop_child_processes(
     terminate_timeout_seconds: float = 5.0,
 ) -> None:
     for process in processes:
-        if process.poll() is None:
-            process.terminate()
+        if process.poll() is not None:
+            continue
+        _signal_process_tree(process, signal.SIGTERM)
 
     for process in processes:
         if process.poll() is not None:
@@ -225,8 +227,27 @@ def _stop_child_processes(
         try:
             process.wait(timeout=terminate_timeout_seconds)
         except subprocess.TimeoutExpired:
-            process.kill()
+            _signal_process_tree(process, signal.SIGKILL)
             process.wait()
+
+
+def _signal_process_tree(process: subprocess.Popen[str], signum: int) -> None:
+    try:
+        process_group_id = os.getpgid(process.pid)
+    except (AttributeError, ProcessLookupError):
+        process_group_id = None
+
+    if process_group_id is not None:
+        try:
+            os.killpg(process_group_id, signum)
+            return
+        except ProcessLookupError:
+            return
+
+    if signum == signal.SIGKILL:
+        process.kill()
+    else:
+        process.terminate()
 
 
 def _run_dual_capture(
@@ -260,6 +281,7 @@ def _run_dual_capture(
                     stderr=subprocess.PIPE,
                     text=True,
                     bufsize=1,
+                    start_new_session=True,
                 )
             except OSError as error:
                 print(f"[{child_spec.role} supervisor] failed to start: {error}", file=sys.stderr)
