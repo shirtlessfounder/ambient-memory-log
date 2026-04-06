@@ -3,6 +3,7 @@ from typing import TypeVar
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings.sources import DotEnvSettingsSource, EnvSettingsSource
 
 
 COMMON_MODEL_CONFIG = SettingsConfigDict(
@@ -19,7 +20,14 @@ SettingsT = TypeVar("SettingsT", bound=BaseSettings)
 def load_settings(settings_type: type[SettingsT], *, env_file: str | Path | None = None) -> SettingsT:
     if env_file is None:
         return settings_type()
-    return settings_type(_env_file=str(env_file))
+
+    env_source = EnvSettingsSource(settings_type)
+    dotenv_source = DotEnvSettingsSource(settings_type, env_file=Path(env_file))
+    merged_values = {
+        **env_source(),
+        **dotenv_source(),
+    }
+    return settings_type.model_validate(merged_values)
 
 
 class DatabaseSettings(BaseSettings):

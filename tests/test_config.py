@@ -1,7 +1,7 @@
 from pydantic import ValidationError
 import pytest
 
-from ambient_memory.config import CaptureSettings, Settings
+from ambient_memory.config import CaptureSettings, Settings, load_settings
 
 
 def test_settings_require_database_and_bucket(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
@@ -58,6 +58,31 @@ def test_capture_settings_read_silence_filter_settings_from_dotenv(
 
     assert settings.silence_filter_enabled is False
     assert settings.silence_max_volume_db == -52.5
+
+
+def test_load_settings_prefers_explicit_env_file_over_shell_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SOURCE_ID", "desk-from-shell")
+    monkeypatch.setenv("SPOOL_DIR", "/tmp/from-shell")
+    (tmp_path / ".env.teammate").write_text(
+        "\n".join(
+            (
+                "SOURCE_ID=desk-from-teammate",
+                "DEVICE_OWNER=niyant",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(CaptureSettings, env_file=".env.teammate")
+
+    assert settings.source_id == "desk-from-teammate"
+    assert settings.device_owner == "niyant"
+    assert settings.spool_dir == "/tmp/from-shell"
 
 
 @pytest.mark.parametrize("raw_value", ["0", "-1"])
