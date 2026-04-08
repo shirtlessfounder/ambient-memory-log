@@ -43,6 +43,16 @@ def test_build_capture_command_uses_stable_wav_settings():
     assert "-c:a" in command and command[command.index("-c:a") + 1] == "pcm_s16le"
 
 
+def test_build_capture_command_applies_async_resample_to_keep_chunk_timing_stable():
+    command = build_capture_command(
+        device=AudioDevice(index="1", name="MacBook Pro Microphone"),
+        spool_dir=Path("/tmp/ambient-spool"),
+    )
+
+    assert "-af" in command
+    assert command[command.index("-af") + 1] == "aresample=async=1:first_pts=0"
+
+
 def test_build_capture_command_writes_chunks_into_spool_dir():
     spool_dir = Path("/tmp/ambient-spool")
 

@@ -7,6 +7,7 @@ from ambient_memory.capture.device_discovery import AudioDevice
 DEFAULT_SEGMENT_SECONDS = 30
 DEFAULT_SAMPLE_RATE = 16000
 DEFAULT_CHANNELS = 1
+DEFAULT_AUDIO_FILTER = "aresample=async=1:first_pts=0"
 OUTPUT_TEMPLATE = "chunk-{session_id}-%Y%m%dT%H%M%S%z.wav"
 
 
@@ -35,6 +36,8 @@ def build_capture_command(
         "-i",
         f":{device.index}",
         "-vn",
+        "-af",
+        DEFAULT_AUDIO_FILTER,
         "-ac",
         str(DEFAULT_CHANNELS),
         "-ar",
