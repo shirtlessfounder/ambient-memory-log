@@ -36,6 +36,7 @@ class WorkerRuntimeConfig:
     aws_region: str | None = None
     deepgram_api_key: str | None = None
     pyannote_api_key: str | None = None
+    assemblyai_api_key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -451,6 +452,7 @@ def load_worker_runtime_config(*, dry_run: bool, env_file: str | None = None) ->
         "AWS_REGION": settings.aws_region,
         "DEEPGRAM_API_KEY": settings.deepgram_api_key,
         "PYANNOTE_API_KEY": settings.pyannote_api_key,
+        "ASSEMBLYAI_API_KEY": settings.assemblyai_api_key,
     }
     missing = [name for name, value in required.items() if not value]
     if missing:
@@ -462,6 +464,7 @@ def load_worker_runtime_config(*, dry_run: bool, env_file: str | None = None) ->
         aws_region=required["AWS_REGION"],
         deepgram_api_key=required["DEEPGRAM_API_KEY"],
         pyannote_api_key=required["PYANNOTE_API_KEY"],
+        assemblyai_api_key=required["ASSEMBLYAI_API_KEY"],
     )
 
 

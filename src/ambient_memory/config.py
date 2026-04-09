@@ -74,6 +74,7 @@ class WorkerSettings(DatabaseSettings):
     aws_region: str | None = Field(default=None, alias="AWS_REGION")
     deepgram_api_key: str | None = Field(default=None, alias="DEEPGRAM_API_KEY")
     pyannote_api_key: str | None = Field(default=None, alias="PYANNOTE_API_KEY")
+    assemblyai_api_key: str | None = Field(default=None, alias="ASSEMBLYAI_API_KEY")
 
     model_config = COMMON_MODEL_CONFIG
 

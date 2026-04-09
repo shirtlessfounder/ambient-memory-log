@@ -1,7 +1,7 @@
 from pydantic import ValidationError
 import pytest
 
-from ambient_memory.config import CaptureSettings, Settings, load_settings
+from ambient_memory.config import CaptureSettings, Settings, WorkerSettings, load_settings
 
 
 def test_settings_require_database_and_bucket(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
@@ -83,6 +83,40 @@ def test_load_settings_prefers_explicit_env_file_over_shell_env(
     assert settings.source_id == "desk-from-teammate"
     assert settings.device_owner == "niyant"
     assert settings.spool_dir == "/tmp/from-shell"
+
+
+def test_load_worker_settings_reads_assemblyai_api_key_from_dotenv(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_SSL_ROOT_CERT", raising=False)
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
+    monkeypatch.delenv("PYANNOTE_API_KEY", raising=False)
+    monkeypatch.delenv("ASSEMBLYAI_API_KEY", raising=False)
+    (tmp_path / ".env.worker").write_text(
+        "\n".join(
+            (
+                "DATABASE_URL=postgresql://db.example/worker",
+                "AWS_REGION=us-east-1",
+                "DEEPGRAM_API_KEY=deepgram-secret",
+                "PYANNOTE_API_KEY=pyannote-secret",
+                "ASSEMBLYAI_API_KEY=assemblyai-secret",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(WorkerSettings, env_file=".env.worker")
+
+    assert settings.database_url == "postgresql://db.example/worker"
+    assert settings.aws_region == "us-east-1"
+    assert settings.deepgram_api_key == "deepgram-secret"
+    assert settings.pyannote_api_key == "pyannote-secret"
+    assert settings.assemblyai_api_key == "assemblyai-secret"
 
 
 @pytest.mark.parametrize("raw_value", ["0", "-1"])
