@@ -1,11 +1,11 @@
 # Ambient Memory Smoke Test
 
-Goal: prove one source can capture audio, upload a chunk, process it, surface it through `/search`, return a replay URL, and, when room capture is active, show recent `room-1` transcript rows with `vendor='assemblyai'` before you roll the stack wider.
+Goal: prove one source can capture audio, upload a chunk, process it, surface it through `/search`, return a replay URL, and, when room capture is active, verify that `room-1` raw uploads stay immediate while searchable room output stays hidden until a named `AssemblyAI` batch is accepted.
 
 ## Before You Start
 
 - Work from `/Users/your-user/Projects/ambient-memory-log`.
-- Fill `.env` with the shared database, S3, and API keys from `.env.example`. If you are validating the room path, make sure the worker env also includes `DEEPGRAM_API_KEY`, `PYANNOTE_API_KEY`, and `ASSEMBLYAI_API_KEY`.
+- Fill `.env` with the shared database, S3, and API keys from `.env.example`. If you are validating the room path, make sure the worker env also includes `DEEPGRAM_API_KEY`, `PYANNOTE_API_KEY`, `ASSEMBLYAI_API_KEY`, `ROOM_SPEAKER_ROSTER_PATH=./config/room-speakers.json`, `ROOM_ASSEMBLY_WINDOW_SECONDS=600`, and `ROOM_ASSEMBLY_IDLE_FLUSH_SECONDS=120`.
 - Install `ffmpeg`, `jq`, and `psql`.
 - Pick a searchable phrase for the live capture, such as `ambient smoke test alpha`.
 
@@ -83,22 +83,48 @@ Expected result:
 - the dry-run reports at least one pending uploaded chunk
 - the real run reports processed chunks and zero failures
 
-## 6. Verify Recent `room-1` Transcript Rows Use AssemblyAI
+## 6. Optional: Verify Delayed `room-1` Publication
 
-If room capture is running anywhere in the stack, confirm the latest room transcript candidates came from the new worker path:
+If room capture is running anywhere in the stack, validate the delayed room path directly. Keep the worker running under `launchd` or with `uv run ambient-memory start-worker` while you watch the database.
+
+First confirm raw room uploads still land every `30s`:
 
 ```bash
 psql "$DATABASE_URL" \
-  -c "select source_id, vendor, left(text, 80) as text, speaker_hint, started_at from aa_transcript_candidates where source_id = 'room-1' order by created_at desc limit 5;"
+  -c "select source_id, status, left(s3_key, 80) as s3_key, started_at, uploaded_at from aa_audio_chunks where source_id = 'room-1' order by uploaded_at desc limit 10;"
 ```
 
 Expected result:
 
 - the newest rows show `source_id='room-1'`
-- the newest rows show `vendor='assemblyai'`
-- `text` is non-empty
-- `speaker_hint` is often populated when diarization produced a room speaker label
-- compared with the old near-zero room-label baseline, canonical room turns should now show materially more names
+- new rows keep arriving roughly every `30s` while room capture is active
+- raw upload timing is unchanged even though room publication is delayed
+
+Immediately after a fresh room upload, confirm room output does not appear right away:
+
+```bash
+psql "$DATABASE_URL" \
+  -c "select source_id, vendor, left(text, 80) as text, speaker_hint, started_at, created_at from aa_transcript_candidates where source_id = 'room-1' order by created_at desc limit 10;"
+
+psql "$DATABASE_URL" \
+  -c "select canonical_source_id, speaker_name, left(text, 80) as text, started_at, created_at from aa_canonical_utterances where canonical_source_id = 'room-1' order by created_at desc limit 10;"
+
+psql "$DATABASE_URL" \
+  -c "select count(*) as diarization_names from aa_canonical_utterances where canonical_source_id = 'room-1' and speaker_name in ('A', 'B', 'C');"
+```
+
+Expected result:
+
+- a fresh `room-1` upload does not create immediate searchable room output
+- room transcript/canonical rows can lag by roughly `10` minutes during continuous speech because the worker waits for a `ROOM_ASSEMBLY_WINDOW_SECONDS` batch
+- if the room goes quiet, a shorter trailing span can flush after `ROOM_ASSEMBLY_IDLE_FLUSH_SECONDS`
+
+After about `10` minutes of contiguous room audio, or after an idle flush:
+
+- either new `room-1` rows appear with `vendor='assemblyai'` and real roster names
+- or room output is still hidden because naming quality was not good enough yet
+- `speaker_name` must never surface as `A/B/C`; those diarization labels are suppressed as real names even if `speaker_hint` still shows them internally
+- if rows do appear, compare them with `/search` and verify the surfaced room names are real roster names or blank, never diarization letters
 
 ## 7. Start The API And Query `/search`
 

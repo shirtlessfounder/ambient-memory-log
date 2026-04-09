@@ -51,6 +51,9 @@ Set these values in `.env.worker`:
 - `DEEPGRAM_API_KEY`
 - `PYANNOTE_API_KEY`
 - `ASSEMBLYAI_API_KEY`
+- `ROOM_SPEAKER_ROSTER_PATH`, usually `./config/room-speakers.json`
+- `ROOM_ASSEMBLY_WINDOW_SECONDS=600`
+- `ROOM_ASSEMBLY_IDLE_FLUSH_SECONDS=120`
 
 Set these values in `.env.api`:
 
@@ -109,6 +112,8 @@ Set the teammate-specific values in `.env.teammate`, especially:
 For any capture role on this machine, the uploader uses a conservative local silence filter. Obviously silent chunks may be skipped locally before upload, and lower, more negative `SILENCE_MAX_VOLUME_DB` values are safer for quiet speech.
 
 Capture still writes raw audio locally and uploads the same chunks as before. The vendor split now happens in the worker: `room-1` transcript + room labeling use `AssemblyAI`, while non-room sources still use `Deepgram` + `pyannote`.
+
+For `room-1`, that worker path is intentionally delayed. Raw room chunks still upload every `30s`, but the worker batches contiguous room audio into `ROOM_ASSEMBLY_WINDOW_SECONDS` windows and can idle-flush a shorter tail after `ROOM_ASSEMBLY_IDLE_FLUSH_SECONDS`. Searchable room output appears only after an `AssemblyAI` room batch returns at least one real name from the roster file. If `AssemblyAI` only echoes diarization labels like `A/B/C`, the batch stays hidden and those labels are never surfaced as real speaker names.
 
 This doc assumes the shared database and bucket already exist.
 
@@ -194,6 +199,8 @@ What it does:
 - writes canonical utterances to Postgres
 
 ## 4. Run The API
+
+Operator expectation: `room-1` raw uploads stay immediate, but first searchable room output can lag by about `10` minutes during continuous speech because publication waits for a named `AssemblyAI` batch.
 
 Manual start:
 

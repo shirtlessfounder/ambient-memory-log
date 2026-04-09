@@ -14,6 +14,8 @@ For normal day-to-day use, the intended setup is `launchd` on macOS. That means 
 
 Raw capture, S3 storage, canonical utterance storage, search, and replay stay the same on this branch. Inside the worker, `room-1` now uses `AssemblyAI` for transcript + room speaker labeling, while non-room sources still use `Deepgram` + `pyannote`.
 
+For `room-1`, raw capture and upload still happen every `30s`. Publication is delayed on purpose: the worker batches contiguous room chunks into `ROOM_ASSEMBLY_WINDOW_SECONDS` windows (default `600`), can idle-flush a shorter trailing span after `ROOM_ASSEMBLY_IDLE_FLUSH_SECONDS` (default `120`), and writes room transcript/search output only after `AssemblyAI` returns at least one real roster name from `ROOM_SPEAKER_ROSTER_PATH`. Bare diarization labels like `A/B/C` are treated as hints, not surfaced speaker names.
+
 ## Commands
 
 - `uv run ambient-memory list-devices`

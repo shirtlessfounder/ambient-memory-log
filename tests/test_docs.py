@@ -23,7 +23,9 @@ def test_smoke_test_doc_mentions_assemblyai_room_verification() -> None:
 
     assert "room-1" in text
     assert "assemblyai" in text
-    assert "vendor='assemblyai'" in text or 'vendor="assemblyai"' in text
+    assert "delayed" in text
+    assert "10" in text
+    assert "a/b/c" in text
 
 
 def test_smoke_test_doc_covers_required_operator_flow() -> None:
@@ -34,6 +36,8 @@ def test_smoke_test_doc_covers_required_operator_flow() -> None:
     assert "live capture" in text
     assert "postgres" in text
     assert "open" in text and "replay" in text
+    assert "30s" in text or "30 seconds" in text
+    assert "hidden" in text
 
 
 def test_launchd_templates_exist_for_worker_and_api() -> None:
@@ -126,6 +130,14 @@ def test_env_example_mentions_assemblyai_api_key() -> None:
     assert "ASSEMBLYAI_API_KEY" in text
 
 
+def test_env_example_mentions_room_window_settings() -> None:
+    text = _read(".env.example")
+
+    assert "ROOM_SPEAKER_ROSTER_PATH" in text
+    assert "ROOM_ASSEMBLY_WINDOW_SECONDS" in text
+    assert "ROOM_ASSEMBLY_IDLE_FLUSH_SECONDS" in text
+
+
 def test_env_example_mentions_silence_filter_settings() -> None:
     text = _read(".env.example")
 
@@ -154,6 +166,9 @@ def test_readme_explains_room_1_assemblyai_path() -> None:
     assert "assemblyai" in text
     assert "deepgram" in text
     assert "pyannote" in text
+    assert "delayed" in text
+    assert "room_speaker_roster_path" in text
+    assert "a/b/c" in text
 
 
 def test_readme_explains_launchd_background_startup() -> None:
@@ -183,6 +198,10 @@ def test_ops_machine_setup_doc_mentions_assemblyai_worker_env_and_room_path() ->
     assert "assemblyai" in text
     assert "deepgram" in text
     assert "pyannote" in text
+    assert "room_speaker_roster_path" in text
+    assert "room_assembly_window_seconds" in text
+    assert "room_assembly_idle_flush_seconds" in text
+    assert "a/b/c" in text
 
 
 def test_voiceprint_docs_exist_and_reference_live_enrollment() -> None:
