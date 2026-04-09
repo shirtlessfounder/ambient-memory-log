@@ -50,6 +50,7 @@ Set these values in `.env.worker`:
 - `AWS_REGION`
 - `DEEPGRAM_API_KEY`
 - `PYANNOTE_API_KEY`
+- `ASSEMBLYAI_API_KEY`
 
 Set these values in `.env.api`:
 
@@ -106,6 +107,8 @@ Set the teammate-specific values in `.env.teammate`, especially:
 - `S3_BUCKET`
 
 For any capture role on this machine, the uploader uses a conservative local silence filter. Obviously silent chunks may be skipped locally before upload, and lower, more negative `SILENCE_MAX_VOLUME_DB` values are safer for quiet speech.
+
+Capture still writes raw audio locally and uploads the same chunks as before. The vendor split now happens in the worker: `room-1` transcript + room labeling use `AssemblyAI`, while non-room sources still use `Deepgram` + `pyannote`.
 
 This doc assumes the shared database and bucket already exist.
 
@@ -185,7 +188,8 @@ What it does:
 
 - reads uploaded chunks
 - runs transcription
-- runs speaker matching
+- uses `AssemblyAI` for `room-1` transcript + room labeling
+- uses `Deepgram` + `pyannote` for non-room sources
 - dedups across sources
 - writes canonical utterances to Postgres
 

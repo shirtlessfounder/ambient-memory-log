@@ -13,8 +13,17 @@ def test_smoke_test_doc_mentions_capture_worker_api_and_search() -> None:
 
     assert "agent run --dry-run" in text
     assert "worker run-once --dry-run" in text
+    assert "vendor='assemblyai'" in text or 'vendor="assemblyai"' in text
     assert "/search" in text
     assert "presigned" in text.lower()
+
+
+def test_smoke_test_doc_mentions_assemblyai_room_verification() -> None:
+    text = _read("docs/ops/smoke-test.md").lower()
+
+    assert "room-1" in text
+    assert "assemblyai" in text
+    assert "vendor='assemblyai'" in text or 'vendor="assemblyai"' in text
 
 
 def test_smoke_test_doc_covers_required_operator_flow() -> None:
@@ -111,6 +120,12 @@ def test_env_example_mentions_capture_device_name() -> None:
     assert "CAPTURE_DEVICE_NAME" in text
 
 
+def test_env_example_mentions_assemblyai_api_key() -> None:
+    text = _read(".env.example")
+
+    assert "ASSEMBLYAI_API_KEY" in text
+
+
 def test_env_example_mentions_silence_filter_settings() -> None:
     text = _read(".env.example")
 
@@ -132,6 +147,15 @@ def test_readme_links_teammate_and_ops_machine_setup_docs() -> None:
     assert "start-api" in text
 
 
+def test_readme_explains_room_1_assemblyai_path() -> None:
+    text = _read("README.md").lower()
+
+    assert "room-1" in text
+    assert "assemblyai" in text
+    assert "deepgram" in text
+    assert "pyannote" in text
+
+
 def test_readme_explains_launchd_background_startup() -> None:
     text = _read("README.md").lower()
 
@@ -149,6 +173,16 @@ def test_ops_machine_setup_doc_covers_dual_capture_mode() -> None:
     assert "com.ambient-memory.dual-capture.plist" in text
     assert "launchctl bootout" in text
     assert "ctrl-c" in text
+
+
+def test_ops_machine_setup_doc_mentions_assemblyai_worker_env_and_room_path() -> None:
+    text = _read("docs/ops-machine-setup.md").lower()
+
+    assert "assemblyai_api_key" in text
+    assert "room-1" in text
+    assert "assemblyai" in text
+    assert "deepgram" in text
+    assert "pyannote" in text
 
 
 def test_voiceprint_docs_exist_and_reference_live_enrollment() -> None:

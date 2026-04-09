@@ -1,11 +1,11 @@
 # Ambient Memory Smoke Test
 
-Goal: prove one source can capture audio, upload a chunk, process it, surface it through `/search`, and return a replay URL before you roll the stack wider.
+Goal: prove one source can capture audio, upload a chunk, process it, surface it through `/search`, return a replay URL, and, when room capture is active, show recent `room-1` transcript rows with `vendor='assemblyai'` before you roll the stack wider.
 
 ## Before You Start
 
 - Work from `/Users/your-user/Projects/ambient-memory-log`.
-- Fill `.env` with the shared database, S3, and API keys from `.env.example`.
+- Fill `.env` with the shared database, S3, and API keys from `.env.example`. If you are validating the room path, make sure the worker env also includes `DEEPGRAM_API_KEY`, `PYANNOTE_API_KEY`, and `ASSEMBLYAI_API_KEY`.
 - Install `ffmpeg`, `jq`, and `psql`.
 - Pick a searchable phrase for the live capture, such as `ambient smoke test alpha`.
 
@@ -83,7 +83,24 @@ Expected result:
 - the dry-run reports at least one pending uploaded chunk
 - the real run reports processed chunks and zero failures
 
-## 6. Start The API And Query `/search`
+## 6. Verify Recent `room-1` Transcript Rows Use AssemblyAI
+
+If room capture is running anywhere in the stack, confirm the latest room transcript candidates came from the new worker path:
+
+```bash
+psql "$DATABASE_URL" \
+  -c "select source_id, vendor, left(text, 80) as text, speaker_hint, started_at from aa_transcript_candidates where source_id = 'room-1' order by created_at desc limit 5;"
+```
+
+Expected result:
+
+- the newest rows show `source_id='room-1'`
+- the newest rows show `vendor='assemblyai'`
+- `text` is non-empty
+- `speaker_hint` is often populated when diarization produced a room speaker label
+- compared with the old near-zero room-label baseline, canonical room turns should now show materially more names
+
+## 7. Start The API And Query `/search`
 
 Start the API in a second terminal if it is not already running under launchd.
 
@@ -100,7 +117,7 @@ curl --silent --get "http://127.0.0.1:8000/search" \
 
 Expected result: the response includes at least one item whose `text` contains the phrase and whose `provenance_summary` references the captured source.
 
-## 7. Open A Presigned Replay URL
+## 8. Open A Presigned Replay URL
 
 Grab the first utterance id from `/search`, fetch its detail record, then open the first replay URL in the macOS default browser or audio player.
 

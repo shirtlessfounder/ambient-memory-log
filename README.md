@@ -12,6 +12,8 @@ Recall-first ambient memory log MVP.
 
 For normal day-to-day use, the intended setup is `launchd` on macOS. That means you do the setup once, then macOS keeps the service running in the background. Teammates should not need to keep Terminal open or re-run commands every morning. The service starts again on login.
 
+Raw capture, S3 storage, canonical utterance storage, search, and replay stay the same on this branch. Inside the worker, `room-1` now uses `AssemblyAI` for transcript + room speaker labeling, while non-room sources still use `Deepgram` + `pyannote`.
+
 ## Commands
 
 - `uv run ambient-memory list-devices`
