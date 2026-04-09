@@ -41,6 +41,9 @@ class WorkerRuntimeConfig:
     deepgram_api_key: str | None = None
     pyannote_api_key: str | None = None
     assemblyai_api_key: str | None = None
+    room_speaker_roster_path: str | None = None
+    room_assembly_window_seconds: int = 600
+    room_assembly_idle_flush_seconds: int = 120
 
 
 @dataclass(frozen=True, slots=True)
@@ -538,18 +541,28 @@ def load_worker_runtime_config(*, dry_run: bool, env_file: str | None = None) ->
         settings = load_settings(WorkerSettings, env_file=env_file)
     except ValidationError as exc:
         missing_fields = sorted(
-            str(error["loc"][0])
+            _worker_settings_field_name(str(error["loc"][0]))
             for error in exc.errors()
             if error.get("type") == "missing" and error.get("loc")
         )
         if missing_fields:
             raise RuntimeError(f"missing required environment variables: {', '.join(missing_fields)}") from exc
+        invalid_fields = sorted(
+            _worker_settings_field_name(str(error["loc"][0]))
+            for error in exc.errors()
+            if error.get("loc")
+        )
+        if invalid_fields:
+            raise RuntimeError(f"invalid worker environment variables: {', '.join(invalid_fields)}") from exc
         raise
 
     if dry_run:
         return WorkerRuntimeConfig(
             database_url=settings.database_url,
             database_ssl_root_cert=settings.database_ssl_root_cert,
+            room_speaker_roster_path=settings.room_speaker_roster_path,
+            room_assembly_window_seconds=settings.room_assembly_window_seconds,
+            room_assembly_idle_flush_seconds=settings.room_assembly_idle_flush_seconds,
         )
 
     required = {
@@ -557,6 +570,7 @@ def load_worker_runtime_config(*, dry_run: bool, env_file: str | None = None) ->
         "DEEPGRAM_API_KEY": settings.deepgram_api_key,
         "PYANNOTE_API_KEY": settings.pyannote_api_key,
         "ASSEMBLYAI_API_KEY": settings.assemblyai_api_key,
+        "ROOM_SPEAKER_ROSTER_PATH": settings.room_speaker_roster_path,
     }
     missing = [name for name, value in required.items() if not value]
     if missing:
@@ -569,6 +583,9 @@ def load_worker_runtime_config(*, dry_run: bool, env_file: str | None = None) ->
         deepgram_api_key=required["DEEPGRAM_API_KEY"],
         pyannote_api_key=required["PYANNOTE_API_KEY"],
         assemblyai_api_key=required["ASSEMBLYAI_API_KEY"],
+        room_speaker_roster_path=required["ROOM_SPEAKER_ROSTER_PATH"],
+        room_assembly_window_seconds=settings.room_assembly_window_seconds,
+        room_assembly_idle_flush_seconds=settings.room_assembly_idle_flush_seconds,
     )
 
 
@@ -609,3 +626,10 @@ def _normalize_timestamp(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _worker_settings_field_name(field_name: str) -> str:
+    field = WorkerSettings.model_fields.get(field_name)
+    if field is None or field.alias is None:
+        return field_name
+    return str(field.alias)

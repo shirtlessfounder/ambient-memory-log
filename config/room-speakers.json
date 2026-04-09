@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Dylan",
+    "description": "Male voice. Often seems to drive or steer discussion. Tends to connect product questions with systems and operational concerns, and can move across topics quickly in a single thread.",
+    "aliases": ["dylan", "dylan vu"]
+  },
+  {
+    "name": "Niyant",
+    "description": "Male voice. Often comes across as analytical and technically grounded. Tends to focus on implementation details, constraints, and concrete execution tradeoffs.",
+    "aliases": ["niyant"]
+  },
+  {
+    "name": "Alex",
+    "description": "Male voice. Often sounds reflective, structured, and evaluative. Tends to frame discussions around reasoning, diagnosis, and whether an approach is actually working.",
+    "aliases": ["alex", "alexander janiak"]
+  },
+  {
+    "name": "Jakub",
+    "description": "Male voice. Often sounds collaborative and coordination-oriented. Tends to frame things in terms of hypotheses, alignment, community, and how people work together.",
+    "aliases": ["jakub", "jakub janiak"]
+  }
+]

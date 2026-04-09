@@ -75,6 +75,13 @@ class WorkerSettings(DatabaseSettings):
     deepgram_api_key: str | None = Field(default=None, alias="DEEPGRAM_API_KEY")
     pyannote_api_key: str | None = Field(default=None, alias="PYANNOTE_API_KEY")
     assemblyai_api_key: str | None = Field(default=None, alias="ASSEMBLYAI_API_KEY")
+    room_speaker_roster_path: str | None = Field(default=None, alias="ROOM_SPEAKER_ROSTER_PATH")
+    room_assembly_window_seconds: int = Field(default=600, alias="ROOM_ASSEMBLY_WINDOW_SECONDS", gt=0)
+    room_assembly_idle_flush_seconds: int = Field(
+        default=120,
+        alias="ROOM_ASSEMBLY_IDLE_FLUSH_SECONDS",
+        gt=0,
+    )
 
     model_config = COMMON_MODEL_CONFIG
 
