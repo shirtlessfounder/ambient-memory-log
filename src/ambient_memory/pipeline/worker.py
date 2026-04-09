@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
+import json
 import logging
 from pathlib import Path
 from time import sleep
-from typing import Any
+from typing import Any, Callable
+import wave
 
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -13,13 +16,14 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from ambient_memory.config import DatabaseSettings, WorkerSettings, load_settings
 from ambient_memory.db import build_session_factory
-from ambient_memory.integrations.assemblyai_client import AssemblyAIClient
+from ambient_memory.integrations.assemblyai_client import AssemblyAIClient, AssemblyAISpeakerProfile
 from ambient_memory.integrations.deepgram_client import DeepgramClient
 from ambient_memory.integrations.pyannote_client import IdentificationMatch, PyannoteClient, VoiceprintReference
 from ambient_memory.logging import configure_logging
 from ambient_memory.models import AudioChunk, Source, TranscriptCandidate, Voiceprint
 from ambient_memory.pipeline.dedup import DedupCandidate, merge_transcript_candidates, persist_canonical_utterances
 from ambient_memory.pipeline.normalize import normalize_deepgram_response
+from ambient_memory.pipeline.room_windows import PendingRoomChunk as PendingRoomWindowChunk, select_room_windows
 from ambient_memory.pipeline.speaker_matching import choose_speaker
 from ambient_memory.pipeline.windows import WindowChunk, group_processing_windows
 
@@ -29,7 +33,6 @@ UPLOADED_STATUS = "uploaded"
 PROCESSED_STATUS = "processed"
 FAILED_STATUS = "failed"
 ROOM_ASSEMBLY_SOURCE_ID = "room-1"
-ROOM_ASSEMBLY_SPEAKER_ROSTER = ("Dylan", "Niyant", "Alex", "Jakub")
 ASSEMBLYAI_VENDOR = "assemblyai"
 
 
@@ -77,6 +80,11 @@ class PipelineWorker:
         pyannote_client: Any | None,
         assemblyai_client: Any | None = None,
         processing_version: str = "v1",
+        room_speaker_roster_path: str | None = None,
+        room_speakers: tuple[AssemblyAISpeakerProfile, ...] | None = None,
+        room_assembly_window_seconds: int = 600,
+        room_assembly_idle_flush_seconds: int = 120,
+        now: Callable[[], datetime] | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.s3_client = s3_client
@@ -84,14 +92,30 @@ class PipelineWorker:
         self.pyannote_client = pyannote_client
         self.assemblyai_client = assemblyai_client
         self.processing_version = processing_version
+        self.room_speaker_roster_path = room_speaker_roster_path
+        self._room_speakers = room_speakers
+        self.room_assembly_window_seconds = room_assembly_window_seconds
+        self.room_assembly_idle_flush_seconds = room_assembly_idle_flush_seconds
+        self.now = now or (lambda: datetime.now(UTC))
 
     def run_once(self, *, dry_run: bool = False) -> WorkerRunResult:
         pending_chunks = self._load_pending_chunks()
-        windows = self._group_windows(pending_chunks)
+        room_chunks = {
+            chunk_id: chunk
+            for chunk_id, chunk in pending_chunks.items()
+            if _uses_assemblyai(chunk.source_id)
+        }
+        legacy_chunks = {
+            chunk_id: chunk
+            for chunk_id, chunk in pending_chunks.items()
+            if not _uses_assemblyai(chunk.source_id)
+        }
+        windows = self._group_windows(legacy_chunks)
+        room_batches = self._select_room_batches(room_chunks)
         if dry_run:
             return WorkerRunResult(
                 pending_chunks=len(pending_chunks),
-                windows=len(windows),
+                windows=len(windows) + len(room_batches),
                 processed_chunks=0,
                 failed_chunks=0,
                 dry_run=True,
@@ -104,7 +128,7 @@ class PipelineWorker:
             chunk_ids = [chunk.chunk_id for chunk in window.chunks]
             try:
                 self._process_window(
-                    chunks=[pending_chunks[chunk_id] for chunk_id in chunk_ids],
+                    chunks=[legacy_chunks[chunk_id] for chunk_id in chunk_ids],
                 )
             except Exception as exc:
                 LOGGER.exception("worker window failed chunk_ids=%s", chunk_ids)
@@ -113,9 +137,19 @@ class PipelineWorker:
             else:
                 processed_chunks += len(chunk_ids)
 
+        for batch in room_batches:
+            chunk_ids = [chunk.id for chunk in batch]
+            try:
+                processed = self._process_room_batch(chunks=batch)
+            except Exception:
+                LOGGER.exception("worker room batch failed chunk_ids=%s", chunk_ids)
+                continue
+            if processed:
+                processed_chunks += len(chunk_ids)
+
         return WorkerRunResult(
             pending_chunks=len(pending_chunks),
-            windows=len(windows),
+            windows=len(windows) + len(room_batches),
             processed_chunks=processed_chunks,
             failed_chunks=failed_chunks,
         )
@@ -146,6 +180,27 @@ class PipelineWorker:
             ),
             reverse=True,
         )
+
+    def _select_room_batches(self, pending_chunks: dict[str, PendingChunk]) -> list[tuple[PendingChunk, ...]]:
+        selection = select_room_windows(
+            (
+                PendingRoomWindowChunk(
+                    chunk_id=chunk.id,
+                    source_id=chunk.source_id,
+                    started_at=chunk.started_at,
+                    ended_at=chunk.ended_at,
+                )
+                for chunk in pending_chunks.values()
+            ),
+            window_seconds=self.room_assembly_window_seconds,
+            idle_flush_seconds=self.room_assembly_idle_flush_seconds,
+            now=self.now(),
+        )
+        chunk_lookup = {chunk.id: chunk for chunk in pending_chunks.values()}
+        return [
+            tuple(chunk_lookup[batch_chunk.chunk_id] for batch_chunk in batch.chunks)
+            for batch in selection.ready_batches
+        ]
 
     def _load_pending_chunks(self) -> dict[str, PendingChunk]:
         session = self.session_factory()
@@ -184,15 +239,6 @@ class PipelineWorker:
 
             for chunk in chunks:
                 audio_bytes = self._load_audio_bytes(chunk)
-                if _uses_assemblyai(chunk.source_id):
-                    self._process_room_chunk(
-                        session=session,
-                        chunk=chunk,
-                        audio_bytes=audio_bytes,
-                        dedup_candidates=dedup_candidates,
-                    )
-                    continue
-
                 if voiceprints is None:
                     voiceprints = self._load_voiceprints(session)
                 self._process_legacy_chunk(
@@ -221,37 +267,61 @@ class PipelineWorker:
         finally:
             session.close()
 
-    def _process_room_chunk(
-        self,
-        *,
-        session: Session,
-        chunk: PendingChunk,
-        audio_bytes: bytes,
-        dedup_candidates: list[DedupCandidate],
-    ) -> None:
+    def _process_room_batch(self, *, chunks: tuple[PendingChunk, ...]) -> bool:
         if self.assemblyai_client is None:
             raise RuntimeError("AssemblyAI client is not configured")
 
-        utterances = self.assemblyai_client.transcribe_bytes(
-            audio_bytes,
-            speaker_names=ROOM_ASSEMBLY_SPEAKER_ROSTER,
-        )
-        for utterance in utterances:
-            self._persist_transcript_candidate(
-                session=session,
-                chunk=chunk,
-                vendor=ASSEMBLYAI_VENDOR,
-                vendor_segment_id=utterance.vendor_segment_id,
-                text=utterance.text,
-                speaker_hint=utterance.speaker_hint,
-                speaker_name=utterance.speaker_name,
-                speaker_confidence=None,
-                confidence=utterance.confidence,
-                started_at=chunk.started_at + timedelta(seconds=utterance.start_seconds),
-                ended_at=chunk.started_at + timedelta(seconds=utterance.end_seconds),
-                raw_payload=utterance.raw_payload,
-                dedup_candidates=dedup_candidates,
+        room_speakers = self._load_room_speakers()
+        audio_bytes = self._stitch_room_audio(chunks)
+        utterances = self.assemblyai_client.transcribe_bytes(audio_bytes, speakers=room_speakers)
+        if not any(utterance.speaker_name for utterance in utterances):
+            return False
+
+        session = self.session_factory()
+        try:
+            dedup_candidates: list[DedupCandidate] = []
+            batch_started_at = chunks[0].started_at
+            for utterance in utterances:
+                started_at = batch_started_at + timedelta(seconds=utterance.start_seconds)
+                ended_at = batch_started_at + timedelta(seconds=utterance.end_seconds)
+                self._persist_transcript_candidate(
+                    session=session,
+                    chunk=self._room_chunk_for_utterance(
+                        chunks,
+                        started_at=started_at,
+                        ended_at=ended_at,
+                    ),
+                    vendor=ASSEMBLYAI_VENDOR,
+                    vendor_segment_id=utterance.vendor_segment_id,
+                    text=utterance.text,
+                    speaker_hint=utterance.speaker_hint,
+                    speaker_name=utterance.speaker_name,
+                    speaker_confidence=None,
+                    confidence=utterance.confidence,
+                    started_at=started_at,
+                    ended_at=ended_at,
+                    raw_payload=utterance.raw_payload,
+                    dedup_candidates=dedup_candidates,
+                )
+
+            persist_canonical_utterances(
+                session,
+                merge_transcript_candidates(dedup_candidates),
+                processing_version=self.processing_version,
             )
+            self._mark_chunk_rows(
+                session,
+                chunk_ids=[chunk.id for chunk in chunks],
+                status=PROCESSED_STATUS,
+                error_message=None,
+            )
+            session.commit()
+            return True
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
     def _process_legacy_chunk(
         self,
@@ -448,6 +518,110 @@ class PipelineWorker:
             if callable(close):
                 close()
 
+    def _stitch_room_audio(self, chunks: tuple[PendingChunk, ...]) -> bytes:
+        output = BytesIO()
+        wav_params: tuple[int, int, int, str, str] | None = None
+
+        with wave.open(output, "wb") as output_wav:
+            for chunk in chunks:
+                chunk_audio = self._load_audio_bytes(chunk)
+                with wave.open(BytesIO(chunk_audio), "rb") as input_wav:
+                    current_params = (
+                        input_wav.getnchannels(),
+                        input_wav.getsampwidth(),
+                        input_wav.getframerate(),
+                        input_wav.getcomptype(),
+                        input_wav.getcompname(),
+                    )
+                    if wav_params is None:
+                        output_wav.setnchannels(current_params[0])
+                        output_wav.setsampwidth(current_params[1])
+                        output_wav.setframerate(current_params[2])
+                        output_wav.setcomptype(current_params[3], current_params[4])
+                        wav_params = current_params
+                    elif current_params != wav_params:
+                        raise RuntimeError("room batch audio chunks must share WAV parameters")
+
+                    output_wav.writeframes(input_wav.readframes(input_wav.getnframes()))
+
+        return output.getvalue()
+
+    def _load_room_speakers(self) -> tuple[AssemblyAISpeakerProfile, ...]:
+        if self._room_speakers is not None:
+            return self._room_speakers
+        if self.room_speaker_roster_path is None:
+            raise RuntimeError("ROOM_SPEAKER_ROSTER_PATH is required for room batches")
+
+        roster_path = Path(self.room_speaker_roster_path)
+        payload = json.loads(roster_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, list):
+            raise RuntimeError("room speaker roster must be a JSON array")
+
+        speakers: list[AssemblyAISpeakerProfile] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                raise RuntimeError("room speaker roster entries must be JSON objects")
+
+            name = _optional_roster_string(item.get("name"))
+            if name is None:
+                raise RuntimeError("room speaker roster entries must include a name")
+
+            aliases_value = item.get("aliases", ())
+            if aliases_value is None:
+                aliases: tuple[str, ...] = ()
+            elif isinstance(aliases_value, list | tuple):
+                aliases = tuple(
+                    alias
+                    for alias in (_optional_roster_string(value) for value in aliases_value)
+                    if alias is not None
+                )
+            else:
+                raise RuntimeError("room speaker aliases must be a JSON array when present")
+
+            speakers.append(
+                AssemblyAISpeakerProfile(
+                    name=name,
+                    description=_optional_roster_string(item.get("description")),
+                    aliases=aliases,
+                )
+            )
+
+        if not speakers:
+            raise RuntimeError("room speaker roster must include at least one speaker")
+
+        self._room_speakers = tuple(speakers)
+        return self._room_speakers
+
+    def _room_chunk_for_utterance(
+        self,
+        chunks: tuple[PendingChunk, ...],
+        *,
+        started_at: datetime,
+        ended_at: datetime,
+    ) -> PendingChunk:
+        best_chunk = chunks[0]
+        best_overlap = -1.0
+
+        for chunk in chunks:
+            overlap = _datetime_overlap_seconds(
+                started_at=started_at,
+                ended_at=ended_at,
+                chunk_started_at=chunk.started_at,
+                chunk_ended_at=chunk.ended_at,
+            )
+            if overlap > best_overlap:
+                best_chunk = chunk
+                best_overlap = overlap
+
+        if best_overlap > 0:
+            return best_chunk
+
+        for chunk in chunks:
+            if started_at < chunk.ended_at:
+                return chunk
+
+        return chunks[-1]
+
     def _load_voiceprints(self, session: Session) -> list[VoiceprintReference]:
         rows = session.scalars(select(Voiceprint).order_by(Voiceprint.speaker_label, Voiceprint.id)).all()
         return [
@@ -500,6 +674,9 @@ def run_worker_once(*, dry_run: bool = False, env_file: str | None = None) -> Wo
             s3_client=None,
             deepgram_client=None,
             pyannote_client=None,
+            room_speaker_roster_path=config.room_speaker_roster_path,
+            room_assembly_window_seconds=config.room_assembly_window_seconds,
+            room_assembly_idle_flush_seconds=config.room_assembly_idle_flush_seconds,
         )
         return worker.run_once(dry_run=True)
 
@@ -519,6 +696,7 @@ def build_worker(config: WorkerRuntimeConfig) -> PipelineWorker:
         or config.deepgram_api_key is None
         or config.pyannote_api_key is None
         or config.assemblyai_api_key is None
+        or config.room_speaker_roster_path is None
     ):
         raise RuntimeError("worker runtime configuration is incomplete")
 
@@ -533,6 +711,9 @@ def build_worker(config: WorkerRuntimeConfig) -> PipelineWorker:
         deepgram_client=DeepgramClient(api_key=config.deepgram_api_key),
         pyannote_client=PyannoteClient(api_key=config.pyannote_api_key),
         assemblyai_client=AssemblyAIClient(api_key=config.assemblyai_api_key),
+        room_speaker_roster_path=config.room_speaker_roster_path,
+        room_assembly_window_seconds=config.room_assembly_window_seconds,
+        room_assembly_idle_flush_seconds=config.room_assembly_idle_flush_seconds,
     )
 
 
@@ -626,6 +807,30 @@ def _normalize_timestamp(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _datetime_overlap_seconds(
+    *,
+    started_at: datetime,
+    ended_at: datetime,
+    chunk_started_at: datetime,
+    chunk_ended_at: datetime,
+) -> float:
+    return max(
+        0.0,
+        (
+            min(ended_at, chunk_ended_at) -
+            max(started_at, chunk_started_at)
+        ).total_seconds(),
+    )
+
+
+def _optional_roster_string(value: Any) -> str | None:
+    if value is None:
+        return None
+
+    normalized = str(value).strip()
+    return normalized or None
 
 
 def _worker_settings_field_name(field_name: str) -> str:
