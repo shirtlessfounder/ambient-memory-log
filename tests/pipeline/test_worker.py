@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session, sessionmaker
 
+from ambient_memory.integrations.assemblyai_client import AssemblyAIClientError, AssemblyAIUtterance
 from ambient_memory.integrations.pyannote_client import IdentificationMatch
 from ambient_memory.models import AudioChunk, CanonicalUtterance, Source, TranscriptCandidate, UtteranceSource, Voiceprint
 from ambient_memory.pipeline.worker import PipelineWorker
@@ -70,6 +71,29 @@ class FakePyannoteClient:
             }
         )
         return self.matches[audio_bytes]
+
+
+class FakeAssemblyAIClient:
+    def __init__(self, responses: dict[bytes, list[AssemblyAIUtterance] | Exception]) -> None:
+        self.responses = responses
+        self.calls: list[dict[str, Any]] = []
+
+    def transcribe_bytes(
+        self,
+        audio_bytes: bytes,
+        *,
+        speaker_names: tuple[str, ...],
+    ) -> list[AssemblyAIUtterance]:
+        self.calls.append(
+            {
+                "audio_bytes": audio_bytes,
+                "speaker_names": speaker_names,
+            }
+        )
+        response = self.responses[audio_bytes]
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 @pytest.fixture
@@ -142,7 +166,7 @@ def _seed_single_uploaded_chunk(session_factory: sessionmaker[Session]) -> None:
         session.close()
 
 
-def test_pipeline_worker_processes_one_window_and_persists_canonical_utterance(
+def test_pipeline_worker_routes_room_1_through_assemblyai_and_persists_vendor(
     session_factory: sessionmaker[Session],
 ) -> None:
     _seed_pending_window(session_factory)
@@ -173,21 +197,6 @@ def test_pipeline_worker_processes_one_window_and_persists_canonical_utterance(
                         ]
                     }
                 },
-                room_audio: {
-                    "results": {
-                        "utterances": [
-                            {
-                                "id": "utt-room",
-                                "start": 1.2,
-                                "end": 3.2,
-                                "confidence": 0.84,
-                                "speaker": 0,
-                                "speaker_confidence": 0.74,
-                                "transcript": "hello there",
-                            }
-                        ]
-                    }
-                },
             }
         ),
         pyannote_client=FakePyannoteClient(
@@ -201,15 +210,22 @@ def test_pipeline_worker_processes_one_window_and_persists_canonical_utterance(
                         end_seconds=3.2,
                     )
                 ],
+            }
+        ),
+        assemblyai_client=FakeAssemblyAIClient(
+            {
                 room_audio: [
-                    IdentificationMatch(
-                        speaker="speaker#room-17",
-                        match="Dylan",
-                        confidence={"Dylan": 0.74},
-                        start_seconds=1.0,
-                        end_seconds=3.3,
+                    AssemblyAIUtterance(
+                        vendor_segment_id="utt-room",
+                        text="hello there",
+                        speaker_hint="A",
+                        speaker_name="Dylan",
+                        confidence=0.84,
+                        start_seconds=1.2,
+                        end_seconds=3.2,
+                        raw_payload={"speaker": "Dylan"},
                     )
-                ],
+                ]
             }
         ),
     )
@@ -230,13 +246,174 @@ def test_pipeline_worker_processes_one_window_and_persists_canonical_utterance(
     assert result.processed_chunks == 2
     assert result.failed_chunks == 0
     assert [chunk.status for chunk in chunks] == ["processed", "processed"]
+    assert worker.deepgram_client.calls == [local_audio]
+    assert [call["audio_bytes"] for call in worker.pyannote_client.calls] == [local_audio]
+    assert [call["audio_bytes"] for call in worker.assemblyai_client.calls] == [room_audio]
     assert [candidate.text for candidate in candidates] == ["Hello there.", "hello there"]
+    assert [candidate.vendor for candidate in candidates] == ["deepgram", "assemblyai"]
     assert len(canonical) == 1
     assert canonical[0].canonical_source_id == "desk-a"
     assert canonical[0].text == "Hello there."
     assert canonical[0].speaker_name == "Dylan"
     assert len(provenance) == 2
     assert sum(row.is_canonical for row in provenance) == 1
+
+
+def test_pipeline_worker_keeps_non_room_1_sources_off_assemblyai_path(
+    session_factory: sessionmaker[Session],
+) -> None:
+    session = session_factory()
+    try:
+        session.add_all(
+            [
+                Source(id="room-2", source_type="room", device_owner="conference-room"),
+                Voiceprint(
+                    speaker_label="Dylan",
+                    provider="pyannote",
+                    provider_voiceprint_id="vp-1",
+                    source_audio_key="voiceprints/dylan.wav",
+                ),
+                AudioChunk(
+                    id="chunk-room-2",
+                    source_id="room-2",
+                    s3_bucket="ambient-memory",
+                    s3_key="raw-audio/room-2/chunk-room-2.wav",
+                    status="uploaded",
+                    started_at=datetime(2026, 4, 2, 13, 0, 0, tzinfo=UTC),
+                    ended_at=datetime(2026, 4, 2, 13, 0, 30, tzinfo=UTC),
+                ),
+            ]
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    room_audio = b"room-two-audio"
+    deepgram_client = FakeDeepgramClient(
+        {
+            room_audio: {
+                "results": {
+                    "utterances": [
+                        {
+                            "id": "utt-room-2",
+                            "start": 1.0,
+                            "end": 3.0,
+                            "confidence": 0.84,
+                            "speaker": 0,
+                            "speaker_confidence": 0.74,
+                            "transcript": "Legacy room path stays here.",
+                        }
+                    ]
+                }
+            }
+        }
+    )
+    pyannote_client = FakePyannoteClient(
+        {
+            room_audio: [
+                IdentificationMatch(
+                    speaker="turn-room-2",
+                    match="Dylan",
+                    confidence={"Dylan": 0.88},
+                    start_seconds=0.8,
+                    end_seconds=3.2,
+                )
+            ]
+        }
+    )
+    assemblyai_client = FakeAssemblyAIClient({})
+    worker = PipelineWorker(
+        session_factory=session_factory,
+        s3_client=FakeS3Client({"raw-audio/room-2/chunk-room-2.wav": room_audio}),
+        deepgram_client=deepgram_client,
+        pyannote_client=pyannote_client,
+        assemblyai_client=assemblyai_client,
+    )
+
+    result = worker.run_once()
+
+    session = session_factory()
+    try:
+        candidate = session.scalars(select(TranscriptCandidate)).one()
+        canonical = session.scalars(select(CanonicalUtterance)).one()
+    finally:
+        session.close()
+
+    assert result.processed_chunks == 1
+    assert deepgram_client.calls == [room_audio]
+    assert [call["audio_bytes"] for call in pyannote_client.calls] == [room_audio]
+    assert assemblyai_client.calls == []
+    assert candidate.vendor == "deepgram"
+    assert canonical.speaker_name == "Dylan"
+
+
+def test_pipeline_worker_marks_room_1_failed_without_legacy_fallback_on_assemblyai_error(
+    session_factory: sessionmaker[Session],
+) -> None:
+    session = session_factory()
+    try:
+        session.add_all(
+            [
+                Source(id="room-1", source_type="room", device_owner=None),
+                AudioChunk(
+                    id="chunk-room",
+                    source_id="room-1",
+                    s3_bucket="ambient-memory",
+                    s3_key="raw-audio/room-1/chunk-room.wav",
+                    status="uploaded",
+                    started_at=datetime(2026, 4, 2, 13, 0, 0, tzinfo=UTC),
+                    ended_at=datetime(2026, 4, 2, 13, 0, 30, tzinfo=UTC),
+                ),
+            ]
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    room_audio = b"room-audio"
+    deepgram_client = FakeDeepgramClient(
+        {
+            room_audio: {
+                "results": {
+                    "utterances": []
+                }
+            }
+        }
+    )
+    pyannote_client = FakePyannoteClient({room_audio: []})
+    assemblyai_client = FakeAssemblyAIClient(
+        {
+            room_audio: AssemblyAIClientError("unsupported audio"),
+        }
+    )
+    worker = PipelineWorker(
+        session_factory=session_factory,
+        s3_client=FakeS3Client({"raw-audio/room-1/chunk-room.wav": room_audio}),
+        deepgram_client=deepgram_client,
+        pyannote_client=pyannote_client,
+        assemblyai_client=assemblyai_client,
+    )
+
+    result = worker.run_once()
+
+    session = session_factory()
+    try:
+        chunk = session.get(AudioChunk, "chunk-room")
+        candidates = session.scalars(select(TranscriptCandidate)).all()
+        canonical = session.scalars(select(CanonicalUtterance)).all()
+    finally:
+        session.close()
+
+    assert result.processed_chunks == 0
+    assert result.failed_chunks == 1
+    assert deepgram_client.calls == []
+    assert pyannote_client.calls == []
+    assert [call["audio_bytes"] for call in assemblyai_client.calls] == [room_audio]
+    assert chunk is not None
+    assert chunk.status == "failed"
+    assert "unsupported audio" in (chunk.error_message or "")
+    assert candidates == []
+    assert canonical == []
 
 
 def test_pipeline_worker_keeps_exact_text_with_conflicting_named_speakers_separate(
@@ -284,21 +461,6 @@ def test_pipeline_worker_keeps_exact_text_with_conflicting_named_speakers_separa
                         ]
                     }
                 },
-                room_audio: {
-                    "results": {
-                        "utterances": [
-                            {
-                                "id": "utt-room",
-                                "start": 7.0,
-                                "end": 9.0,
-                                "confidence": 0.84,
-                                "speaker": 0,
-                                "speaker_confidence": 0.74,
-                                "transcript": "we should ship it",
-                            }
-                        ]
-                    }
-                },
             }
         ),
         pyannote_client=FakePyannoteClient(
@@ -312,15 +474,22 @@ def test_pipeline_worker_keeps_exact_text_with_conflicting_named_speakers_separa
                         end_seconds=3.2,
                     )
                 ],
+            }
+        ),
+        assemblyai_client=FakeAssemblyAIClient(
+            {
                 room_audio: [
-                    IdentificationMatch(
-                        speaker="turn-B",
-                        match="Alex",
-                        confidence={"Alex": 0.91},
-                        start_seconds=6.8,
-                        end_seconds=9.2,
+                    AssemblyAIUtterance(
+                        vendor_segment_id="utt-room",
+                        text="we should ship it",
+                        speaker_hint="B",
+                        speaker_name="Alex",
+                        confidence=0.84,
+                        start_seconds=7.0,
+                        end_seconds=9.0,
+                        raw_payload={"speaker": "Alex"},
                     )
-                ],
+                ]
             }
         ),
     )
@@ -400,21 +569,6 @@ def test_pipeline_worker_does_not_bridge_conflicting_named_speakers_through_unna
                         ]
                     }
                 },
-                room_audio: {
-                    "results": {
-                        "utterances": [
-                            {
-                                "id": "utt-room",
-                                "start": 1.2,
-                                "end": 3.2,
-                                "confidence": 0.84,
-                                "speaker": 0,
-                                "speaker_confidence": 0.74,
-                                "transcript": "we should ship it",
-                            }
-                        ]
-                    }
-                },
                 room_two_audio: {
                     "results": {
                         "utterances": [
@@ -443,7 +597,6 @@ def test_pipeline_worker_does_not_bridge_conflicting_named_speakers_through_unna
                         end_seconds=3.2,
                     )
                 ],
-                room_audio: [],
                 room_two_audio: [
                     IdentificationMatch(
                         speaker="turn-C",
@@ -453,6 +606,22 @@ def test_pipeline_worker_does_not_bridge_conflicting_named_speakers_through_unna
                         end_seconds=3.4,
                     )
                 ],
+            }
+        ),
+        assemblyai_client=FakeAssemblyAIClient(
+            {
+                room_audio: [
+                    AssemblyAIUtterance(
+                        vendor_segment_id="utt-room",
+                        text="we should ship it",
+                        speaker_hint="C",
+                        speaker_name=None,
+                        confidence=0.84,
+                        start_seconds=1.2,
+                        end_seconds=3.2,
+                        raw_payload={"speaker": "C"},
+                    )
+                ]
             }
         ),
     )
@@ -544,14 +713,14 @@ def test_pipeline_worker_matches_speakers_by_time_overlap_not_label_namespace(
     assert canonical.speaker_name == "Dylan"
 
 
-def test_pipeline_worker_allows_room_source_device_owner_metadata_without_suppressing_human_match(
+def test_pipeline_worker_allows_non_room_1_room_source_device_owner_metadata_without_suppressing_human_match(
     session_factory: sessionmaker[Session],
 ) -> None:
     session = session_factory()
     try:
         session.add_all(
             [
-                Source(id="room-1", source_type="room", device_owner="conference-room"),
+                Source(id="room-2", source_type="room", device_owner="conference-room"),
                 Voiceprint(
                     speaker_label="Dylan",
                     provider="pyannote",
@@ -560,9 +729,9 @@ def test_pipeline_worker_allows_room_source_device_owner_metadata_without_suppre
                 ),
                 AudioChunk(
                     id="chunk-room",
-                    source_id="room-1",
+                    source_id="room-2",
                     s3_bucket="ambient-memory",
-                    s3_key="raw-audio/room-1/chunk-room.wav",
+                    s3_key="raw-audio/room-2/chunk-room.wav",
                     status="uploaded",
                     started_at=datetime(2026, 4, 2, 13, 0, 0, tzinfo=UTC),
                     ended_at=datetime(2026, 4, 2, 13, 0, 30, tzinfo=UTC),
@@ -576,7 +745,7 @@ def test_pipeline_worker_allows_room_source_device_owner_metadata_without_suppre
     room_audio = b"room-audio"
     worker = PipelineWorker(
         session_factory=session_factory,
-        s3_client=FakeS3Client({"raw-audio/room-1/chunk-room.wav": room_audio}),
+        s3_client=FakeS3Client({"raw-audio/room-2/chunk-room.wav": room_audio}),
         deepgram_client=FakeDeepgramClient(
             {
                 room_audio: {
@@ -609,6 +778,7 @@ def test_pipeline_worker_allows_room_source_device_owner_metadata_without_suppre
                 ]
             }
         ),
+        assemblyai_client=FakeAssemblyAIClient({}),
     )
 
     result = worker.run_once()

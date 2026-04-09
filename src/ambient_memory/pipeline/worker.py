@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import logging
 from pathlib import Path
 from time import sleep
@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from ambient_memory.config import DatabaseSettings, WorkerSettings, load_settings
 from ambient_memory.db import build_session_factory
+from ambient_memory.integrations.assemblyai_client import AssemblyAIClient
 from ambient_memory.integrations.deepgram_client import DeepgramClient
 from ambient_memory.integrations.pyannote_client import IdentificationMatch, PyannoteClient, VoiceprintReference
 from ambient_memory.logging import configure_logging
@@ -27,6 +28,9 @@ LOGGER = logging.getLogger(__name__)
 UPLOADED_STATUS = "uploaded"
 PROCESSED_STATUS = "processed"
 FAILED_STATUS = "failed"
+ROOM_ASSEMBLY_SOURCE_ID = "room-1"
+ROOM_ASSEMBLY_SPEAKER_ROSTER = ("Dylan", "Niyant", "Alex", "Jakub")
+ASSEMBLYAI_VENDOR = "assemblyai"
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,12 +72,14 @@ class PipelineWorker:
         s3_client: Any | None,
         deepgram_client: Any | None,
         pyannote_client: Any | None,
+        assemblyai_client: Any | None = None,
         processing_version: str = "v1",
     ) -> None:
         self.session_factory = session_factory
         self.s3_client = s3_client
         self.deepgram_client = deepgram_client
         self.pyannote_client = pyannote_client
+        self.assemblyai_client = assemblyai_client
         self.processing_version = processing_version
 
     def run_once(self, *, dry_run: bool = False) -> WorkerRunResult:
@@ -165,68 +171,34 @@ class PipelineWorker:
         }
 
     def _process_window(self, *, chunks: list[PendingChunk]) -> None:
-        if self.s3_client is None or self.deepgram_client is None or self.pyannote_client is None:
+        if self.s3_client is None:
             raise RuntimeError("worker dependencies are not configured")
 
         session = self.session_factory()
         try:
-            voiceprints = self._load_voiceprints(session)
+            voiceprints: list[VoiceprintReference] | None = None
             dedup_candidates: list[DedupCandidate] = []
 
             for chunk in chunks:
                 audio_bytes = self._load_audio_bytes(chunk)
-                deepgram_payload = self.deepgram_client.transcribe_bytes(audio_bytes, content_type="audio/wav")
-                normalized_segments = normalize_deepgram_response(
-                    deepgram_payload,
-                    source_id=chunk.source_id,
-                    chunk_started_at=chunk.started_at,
-                )
-                identified_speakers = self._identify_speakers(
-                    audio_bytes=audio_bytes,
-                    filename=Path(chunk.s3_key).name,
-                    voiceprints=voiceprints,
-                )
+                if _uses_assemblyai(chunk.source_id):
+                    self._process_room_chunk(
+                        session=session,
+                        chunk=chunk,
+                        audio_bytes=audio_bytes,
+                        dedup_candidates=dedup_candidates,
+                    )
+                    continue
 
-                for segment in normalized_segments:
-                    match = self._match_identification_for_segment(
-                        matches=identified_speakers,
-                        segment_started_at=segment.started_at,
-                        segment_ended_at=segment.ended_at,
-                        chunk_started_at=chunk.started_at,
-                    )
-                    speaker_name, speaker_confidence = self._resolve_speaker(
-                        source_type=chunk.source_type,
-                        source_owner=chunk.source_owner,
-                        match=match,
-                    )
-                    row = TranscriptCandidate(
-                        audio_chunk_id=chunk.id,
-                        source_id=chunk.source_id,
-                        vendor=segment.vendor,
-                        vendor_segment_id=segment.vendor_segment_id,
-                        text=segment.text,
-                        speaker_hint=segment.speaker_hint,
-                        speaker_confidence=speaker_confidence,
-                        confidence=segment.confidence,
-                        started_at=segment.started_at,
-                        ended_at=segment.ended_at,
-                        raw_payload=segment.raw_payload,
-                    )
-                    session.add(row)
-                    session.flush()
-                    dedup_candidates.append(
-                        DedupCandidate(
-                            transcript_candidate_id=row.id,
-                            source_id=row.source_id,
-                            source_owner=chunk.source_owner,
-                            text=row.text,
-                            started_at=row.started_at,
-                            ended_at=row.ended_at,
-                            speaker_name=speaker_name,
-                            speaker_confidence=speaker_confidence,
-                            confidence=row.confidence,
-                        )
-                    )
+                if voiceprints is None:
+                    voiceprints = self._load_voiceprints(session)
+                self._process_legacy_chunk(
+                    session=session,
+                    chunk=chunk,
+                    audio_bytes=audio_bytes,
+                    voiceprints=voiceprints,
+                    dedup_candidates=dedup_candidates,
+                )
 
             persist_canonical_utterances(
                 session,
@@ -245,6 +217,136 @@ class PipelineWorker:
             raise
         finally:
             session.close()
+
+    def _process_room_chunk(
+        self,
+        *,
+        session: Session,
+        chunk: PendingChunk,
+        audio_bytes: bytes,
+        dedup_candidates: list[DedupCandidate],
+    ) -> None:
+        if self.assemblyai_client is None:
+            raise RuntimeError("AssemblyAI client is not configured")
+
+        utterances = self.assemblyai_client.transcribe_bytes(
+            audio_bytes,
+            speaker_names=ROOM_ASSEMBLY_SPEAKER_ROSTER,
+        )
+        for utterance in utterances:
+            self._persist_transcript_candidate(
+                session=session,
+                chunk=chunk,
+                vendor=ASSEMBLYAI_VENDOR,
+                vendor_segment_id=utterance.vendor_segment_id,
+                text=utterance.text,
+                speaker_hint=utterance.speaker_hint,
+                speaker_name=utterance.speaker_name,
+                speaker_confidence=None,
+                confidence=utterance.confidence,
+                started_at=chunk.started_at + timedelta(seconds=utterance.start_seconds),
+                ended_at=chunk.started_at + timedelta(seconds=utterance.end_seconds),
+                raw_payload=utterance.raw_payload,
+                dedup_candidates=dedup_candidates,
+            )
+
+    def _process_legacy_chunk(
+        self,
+        *,
+        session: Session,
+        chunk: PendingChunk,
+        audio_bytes: bytes,
+        voiceprints: list[VoiceprintReference],
+        dedup_candidates: list[DedupCandidate],
+    ) -> None:
+        if self.deepgram_client is None or self.pyannote_client is None:
+            raise RuntimeError("legacy worker dependencies are not configured")
+
+        deepgram_payload = self.deepgram_client.transcribe_bytes(audio_bytes, content_type="audio/wav")
+        normalized_segments = normalize_deepgram_response(
+            deepgram_payload,
+            source_id=chunk.source_id,
+            chunk_started_at=chunk.started_at,
+        )
+        identified_speakers = self._identify_speakers(
+            audio_bytes=audio_bytes,
+            filename=Path(chunk.s3_key).name,
+            voiceprints=voiceprints,
+        )
+
+        for segment in normalized_segments:
+            match = self._match_identification_for_segment(
+                matches=identified_speakers,
+                segment_started_at=segment.started_at,
+                segment_ended_at=segment.ended_at,
+                chunk_started_at=chunk.started_at,
+            )
+            speaker_name, speaker_confidence = self._resolve_speaker(
+                source_type=chunk.source_type,
+                source_owner=chunk.source_owner,
+                match=match,
+            )
+            self._persist_transcript_candidate(
+                session=session,
+                chunk=chunk,
+                vendor=segment.vendor,
+                vendor_segment_id=segment.vendor_segment_id,
+                text=segment.text,
+                speaker_hint=segment.speaker_hint,
+                speaker_name=speaker_name,
+                speaker_confidence=speaker_confidence,
+                confidence=segment.confidence,
+                started_at=segment.started_at,
+                ended_at=segment.ended_at,
+                raw_payload=segment.raw_payload,
+                dedup_candidates=dedup_candidates,
+            )
+
+    def _persist_transcript_candidate(
+        self,
+        *,
+        session: Session,
+        chunk: PendingChunk,
+        vendor: str,
+        vendor_segment_id: str | None,
+        text: str,
+        speaker_hint: str | None,
+        speaker_name: str | None,
+        speaker_confidence: float | None,
+        confidence: float | None,
+        started_at: datetime,
+        ended_at: datetime,
+        raw_payload: dict[str, Any],
+        dedup_candidates: list[DedupCandidate],
+    ) -> None:
+        row = TranscriptCandidate(
+            audio_chunk_id=chunk.id,
+            source_id=chunk.source_id,
+            vendor=vendor,
+            vendor_segment_id=vendor_segment_id,
+            text=text,
+            speaker_hint=speaker_hint,
+            speaker_confidence=speaker_confidence,
+            confidence=confidence,
+            started_at=started_at,
+            ended_at=ended_at,
+            raw_payload=raw_payload,
+        )
+        session.add(row)
+        session.flush()
+        dedup_candidates.append(
+            DedupCandidate(
+                transcript_candidate_id=row.id,
+                source_id=row.source_id,
+                source_owner=chunk.source_owner,
+                text=row.text,
+                started_at=row.started_at,
+                ended_at=row.ended_at,
+                speaker_name=speaker_name,
+                speaker_confidence=speaker_confidence,
+                confidence=row.confidence,
+            )
+        )
 
     def _identify_speakers(
         self,
@@ -413,6 +515,7 @@ def build_worker(config: WorkerRuntimeConfig) -> PipelineWorker:
         config.aws_region is None
         or config.deepgram_api_key is None
         or config.pyannote_api_key is None
+        or config.assemblyai_api_key is None
     ):
         raise RuntimeError("worker runtime configuration is incomplete")
 
@@ -426,6 +529,7 @@ def build_worker(config: WorkerRuntimeConfig) -> PipelineWorker:
         s3_client=build_s3_client(config.aws_region),
         deepgram_client=DeepgramClient(api_key=config.deepgram_api_key),
         pyannote_client=PyannoteClient(api_key=config.pyannote_api_key),
+        assemblyai_client=AssemblyAIClient(api_key=config.assemblyai_api_key),
     )
 
 
@@ -495,6 +599,10 @@ def _overlap_seconds(
     if match_start is None or match_end is None:
         return 0.0
     return max(0.0, min(segment_end, match_end) - max(segment_start, match_start))
+
+
+def _uses_assemblyai(source_id: str) -> bool:
+    return source_id == ROOM_ASSEMBLY_SOURCE_ID
 
 
 def _normalize_timestamp(value: datetime) -> datetime:
