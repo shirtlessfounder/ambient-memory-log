@@ -6,7 +6,11 @@ from typing import Any
 
 import pytest
 
-from ambient_memory.integrations.assemblyai_client import AssemblyAIClient, AssemblyAIClientError
+from ambient_memory.integrations.assemblyai_client import (
+    AssemblyAIClient,
+    AssemblyAIClientError,
+    AssemblyAISpeakerProfile,
+)
 
 
 class FakeTransport:
@@ -62,7 +66,7 @@ class FakeTransport:
         return deepcopy(self.upload_response)
 
 
-def test_transcribe_bytes_uploads_audio_submits_job_polls_and_parses_utterances() -> None:
+def test_transcribe_bytes_speaker_uploads_audio_submits_job_polls_and_parses_utterances() -> None:
     transport = FakeTransport(
         transcript_responses=[
             {"id": "tx-123", "status": "queued"},
@@ -109,7 +113,28 @@ def test_transcribe_bytes_uploads_audio_submits_job_polls_and_parses_utterances(
 
     utterances = client.transcribe_bytes(
         b"audio-bytes",
-        speaker_names=("Dylan", "Niyant", "Alex", "Jakub"),
+        speakers=(
+            AssemblyAISpeakerProfile(
+                name="Dylan",
+                description="Drives product and systems discussion.",
+                aliases=("dylan", "dylan vu"),
+            ),
+            AssemblyAISpeakerProfile(
+                name="Niyant",
+                description="Focuses on concrete implementation tradeoffs.",
+                aliases=("niyant",),
+            ),
+            AssemblyAISpeakerProfile(
+                name="Alex",
+                description="Frames diagnosis and whether an approach is working.",
+                aliases=("alex", "alexander janiak"),
+            ),
+            AssemblyAISpeakerProfile(
+                name="Jakub",
+                description="Collaborative and coordination-oriented.",
+                aliases=("jakub", "jakub janiak"),
+            ),
+        ),
     )
 
     assert len(transport.upload_calls) == 1
@@ -132,7 +157,28 @@ def test_transcribe_bytes_uploads_audio_submits_job_polls_and_parses_utterances(
             "request": {
                 "speaker_identification": {
                     "speaker_type": "name",
-                    "known_values": ["Dylan", "Niyant", "Alex", "Jakub"],
+                    "speakers": [
+                        {
+                            "name": "Dylan",
+                            "description": "Drives product and systems discussion.",
+                            "aliases": ["dylan", "dylan vu"],
+                        },
+                        {
+                            "name": "Niyant",
+                            "description": "Focuses on concrete implementation tradeoffs.",
+                            "aliases": ["niyant"],
+                        },
+                        {
+                            "name": "Alex",
+                            "description": "Frames diagnosis and whether an approach is working.",
+                            "aliases": ["alex", "alexander janiak"],
+                        },
+                        {
+                            "name": "Jakub",
+                            "description": "Collaborative and coordination-oriented.",
+                            "aliases": ["jakub", "jakub janiak"],
+                        },
+                    ],
                 }
             }
         },
@@ -156,7 +202,7 @@ def test_transcribe_bytes_uploads_audio_submits_job_polls_and_parses_utterances(
     assert utterances[1].end_seconds == 7.0
 
 
-def test_transcribe_bytes_raises_on_transcript_error_status() -> None:
+def test_transcribe_bytes_speaker_raises_on_transcript_error_status() -> None:
     transport = FakeTransport(
         transcript_responses=[
             {"id": "tx-123", "status": "queued"},
@@ -172,11 +218,11 @@ def test_transcribe_bytes_raises_on_transcript_error_status() -> None:
     with pytest.raises(AssemblyAIClientError, match="unsupported audio"):
         client.transcribe_bytes(
             b"audio-bytes",
-            speaker_names=("Dylan", "Niyant", "Alex", "Jakub"),
+            speakers=(AssemblyAISpeakerProfile(name="Dylan"),),
         )
 
 
-def test_transcribe_bytes_raises_on_malformed_completed_payload() -> None:
+def test_transcribe_bytes_speaker_raises_on_malformed_completed_payload() -> None:
     transport = FakeTransport(
         transcript_responses=[
             {"id": "tx-123", "status": "queued"},
@@ -192,5 +238,63 @@ def test_transcribe_bytes_raises_on_malformed_completed_payload() -> None:
     with pytest.raises(AssemblyAIClientError, match="utterances"):
         client.transcribe_bytes(
             b"audio-bytes",
-            speaker_names=("Dylan", "Niyant", "Alex", "Jakub"),
+            speakers=(AssemblyAISpeakerProfile(name="Dylan"),),
         )
+
+
+def test_transcribe_bytes_speaker_treats_echoed_diarization_labels_as_unnamed() -> None:
+    transport = FakeTransport(
+        transcript_responses=[
+            {"id": "tx-echo", "status": "queued"},
+            {
+                "id": "tx-echo",
+                "status": "completed",
+                "speech_understanding": {
+                    "response": {
+                        "speaker_identification": {
+                            "mapping": {
+                                "A": "A",
+                                "B": "Dylan",
+                            }
+                        }
+                    }
+                },
+                "utterances": [
+                    {
+                        "id": "utt-1",
+                        "speaker": "A",
+                        "start": 0,
+                        "end": 1000,
+                        "confidence": 0.91,
+                        "text": "Still unnamed.",
+                    },
+                    {
+                        "id": "utt-2",
+                        "speaker": "Dylan",
+                        "start": 1000,
+                        "end": 2000,
+                        "confidence": 0.95,
+                        "text": "Real name returned.",
+                    },
+                ],
+            },
+        ]
+    )
+    client = AssemblyAIClient(
+        api_key="assembly-secret",
+        transport=transport,
+        poll_interval_seconds=0,
+    )
+
+    utterances = client.transcribe_bytes(
+        b"audio-bytes",
+        speakers=(AssemblyAISpeakerProfile(name="Dylan"),),
+    )
+
+    assert utterances[0].speaker_hint == "A"
+    assert utterances[0].speaker_name is None
+    assert utterances[0].raw_payload["speaker"] == "A"
+
+    assert utterances[1].speaker_hint == "B"
+    assert utterances[1].speaker_name == "Dylan"
+    assert utterances[1].raw_payload["speaker"] == "Dylan"

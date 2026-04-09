@@ -84,6 +84,13 @@ class AssemblyAIUtterance:
     raw_payload: dict[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class AssemblyAISpeakerProfile:
+    name: str
+    description: str | None = None
+    aliases: tuple[str, ...] = ()
+
+
 class AssemblyAIClient:
     def __init__(
         self,
@@ -106,8 +113,9 @@ class AssemblyAIClient:
         self,
         audio_bytes: bytes,
         *,
-        speaker_names: Sequence[str],
+        speakers: Sequence[AssemblyAISpeakerProfile],
     ) -> list[AssemblyAIUtterance]:
+        speaker_profiles = tuple(speakers)
         upload_response = self.transport.upload_bytes(
             f"{self.base_url}/upload",
             data=audio_bytes,
@@ -121,14 +129,14 @@ class AssemblyAIClient:
             "POST",
             f"{self.base_url}/transcript",
             headers=self._headers(),
-            payload=self._transcript_payload(upload_url=upload_url, speaker_names=speaker_names),
+            payload=self._transcript_payload(upload_url=upload_url, speakers=speaker_profiles),
         )
         transcript_id = _required_string(transcript_response, "id", "transcript create response")
         completed_response = self._poll_until_complete(
             transcript_id=transcript_id,
             initial_response=transcript_response,
         )
-        return self._parse_utterances(completed_response)
+        return self._parse_utterances(completed_response, speakers=speaker_profiles)
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -140,8 +148,9 @@ class AssemblyAIClient:
         self,
         *,
         upload_url: str,
-        speaker_names: Sequence[str],
+        speakers: Sequence[AssemblyAISpeakerProfile],
     ) -> dict[str, Any]:
+        speaker_payloads = [_speaker_payload(profile) for profile in speakers]
         payload: dict[str, Any] = {
             "audio_url": upload_url,
             "language_detection": True,
@@ -151,14 +160,14 @@ class AssemblyAIClient:
                 "request": {
                     "speaker_identification": {
                         "speaker_type": "name",
-                        "known_values": [str(name) for name in speaker_names],
+                        "speakers": speaker_payloads,
                     }
                 }
             },
         }
 
-        if speaker_names:
-            payload["speakers_expected"] = len(speaker_names)
+        if speakers:
+            payload["speakers_expected"] = len(speakers)
 
         return payload
 
@@ -190,12 +199,18 @@ class AssemblyAIClient:
             f"AssemblyAI transcript {transcript_id} did not complete after {self.max_poll_attempts} polls"
         )
 
-    def _parse_utterances(self, payload: Mapping[str, Any]) -> list[AssemblyAIUtterance]:
+    def _parse_utterances(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        speakers: Sequence[AssemblyAISpeakerProfile],
+    ) -> list[AssemblyAIUtterance]:
         utterances = payload.get("utterances")
         if not isinstance(utterances, list):
             raise AssemblyAIClientError("AssemblyAI completed response must include an utterances list")
 
         speaker_mapping = _speaker_mapping(payload)
+        speaker_lookup = _speaker_lookup(speakers)
         parsed: list[AssemblyAIUtterance] = []
         for item in utterances:
             if not isinstance(item, Mapping):
@@ -205,7 +220,11 @@ class AssemblyAIClient:
             if text is None:
                 continue
 
-            speaker_hint, speaker_name = _resolve_speaker(item.get("speaker"), speaker_mapping)
+            speaker_hint, speaker_name = _resolve_speaker(
+                item.get("speaker"),
+                mapping=speaker_mapping,
+                speaker_lookup=speaker_lookup,
+            )
             start_seconds = _milliseconds_to_seconds(item.get("start"), field_name="start")
             end_seconds = _milliseconds_to_seconds(item.get("end"), field_name="end")
 
@@ -223,6 +242,18 @@ class AssemblyAIClient:
             )
 
         return parsed
+
+
+def _speaker_payload(profile: AssemblyAISpeakerProfile) -> dict[str, Any]:
+    payload: dict[str, Any] = {"name": profile.name}
+    description = _optional_string(profile.description)
+    if description is not None:
+        payload["description"] = description
+    aliases = [_optional_string(alias) for alias in profile.aliases]
+    normalized_aliases = [alias for alias in aliases if alias is not None]
+    if normalized_aliases:
+        payload["aliases"] = normalized_aliases
+    return payload
 
 
 def _read_json_response(http_request: request.Request, *, timeout: float) -> dict[str, Any]:
@@ -267,28 +298,63 @@ def _speaker_mapping(payload: Mapping[str, Any]) -> dict[str, str]:
     return normalized
 
 
-def _resolve_speaker(raw_speaker: Any, mapping: Mapping[str, str]) -> tuple[str | None, str | None]:
+def _speaker_lookup(speakers: Sequence[AssemblyAISpeakerProfile]) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for speaker in speakers:
+        canonical_name = _optional_string(speaker.name)
+        if canonical_name is None:
+            continue
+        normalized[_normalize_speaker_key(canonical_name)] = canonical_name
+        for alias in speaker.aliases:
+            normalized_alias = _optional_string(alias)
+            if normalized_alias is None:
+                continue
+            normalized[_normalize_speaker_key(normalized_alias)] = canonical_name
+    return normalized
+
+
+def _resolve_speaker(
+    raw_speaker: Any,
+    *,
+    mapping: Mapping[str, str],
+    speaker_lookup: Mapping[str, str],
+) -> tuple[str | None, str | None]:
     speaker = _optional_string(raw_speaker)
     if speaker is None:
         return None, None
 
     if speaker in mapping:
-        return speaker, mapping[speaker]
+        return speaker, _resolve_speaker_name(mapping[speaker], speaker_lookup)
 
     reverse_mapping: dict[str, str] = {}
     ambiguous_names: set[str] = set()
     for hint, name in mapping.items():
-        if name in reverse_mapping and reverse_mapping[name] != hint:
-            ambiguous_names.add(name)
+        canonical_name = _resolve_speaker_name(name, speaker_lookup)
+        if canonical_name is None:
             continue
-        reverse_mapping[name] = hint
+        if canonical_name in reverse_mapping and reverse_mapping[canonical_name] != hint:
+            ambiguous_names.add(canonical_name)
+            continue
+        reverse_mapping[canonical_name] = hint
 
-    if speaker in reverse_mapping and speaker not in ambiguous_names:
-        return reverse_mapping[speaker], speaker
+    canonical_speaker = _resolve_speaker_name(speaker, speaker_lookup)
+    if canonical_speaker in reverse_mapping and canonical_speaker not in ambiguous_names:
+        return reverse_mapping[canonical_speaker], canonical_speaker
     if _looks_like_diarization_label(speaker):
         return speaker, None
 
-    return None, speaker
+    return None, canonical_speaker
+
+
+def _resolve_speaker_name(raw_name: str, speaker_lookup: Mapping[str, str]) -> str | None:
+    normalized_name = _optional_string(raw_name)
+    if normalized_name is None or _looks_like_diarization_label(normalized_name):
+        return None
+    return speaker_lookup.get(_normalize_speaker_key(normalized_name))
+
+
+def _normalize_speaker_key(value: str) -> str:
+    return value.strip().casefold()
 
 
 def _milliseconds_to_seconds(value: Any, *, field_name: str) -> float:
