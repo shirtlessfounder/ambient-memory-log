@@ -440,7 +440,7 @@ def test_pipeline_worker_keeps_non_room_1_sources_off_assemblyai_path(
     assert canonical.speaker_name == "Dylan"
 
 
-def test_pipeline_worker_room_marks_unnamed_batch_processed_and_hidden(
+def test_pipeline_worker_room_publishes_unnamed_batch_with_diarization_fallback_labels(
     session_factory: sessionmaker[Session],
 ) -> None:
     room_chunks = _seed_room_uploaded_chunks(session_factory, count=20)
@@ -486,8 +486,8 @@ def test_pipeline_worker_room_marks_unnamed_batch_processed_and_hidden(
     session = session_factory()
     try:
         chunks = session.scalars(select(AudioChunk).order_by(AudioChunk.started_at)).all()
-        candidates = session.scalars(select(TranscriptCandidate)).all()
-        canonical = session.scalars(select(CanonicalUtterance)).all()
+        candidates = session.scalars(select(TranscriptCandidate).order_by(TranscriptCandidate.started_at)).all()
+        canonical = session.scalars(select(CanonicalUtterance).order_by(CanonicalUtterance.started_at)).all()
     finally:
         session.close()
 
@@ -501,8 +501,13 @@ def test_pipeline_worker_room_marks_unnamed_batch_processed_and_hidden(
     assert worker.deepgram_client.calls == []
     assert worker.pyannote_client.calls == []
     assert [call["audio_bytes"] for call in worker.assemblyai_client.calls] == [stitched_room_audio]
-    assert candidates == []
-    assert canonical == []
+    assert len(candidates) == 1
+    assert candidates[0].vendor == "assemblyai"
+    assert candidates[0].speaker_hint == "A"
+    assert candidates[0].text == "Still unnamed room turn."
+    assert len(canonical) == 1
+    assert canonical[0].speaker_name == "A"
+    assert canonical[0].text == "Still unnamed room turn."
     assert all(chunk.error_message is None for chunk in chunks)
 
 

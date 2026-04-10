@@ -316,18 +316,12 @@ class PipelineWorker:
             return True
         if not any(utterance.speaker_name for utterance in utterances):
             LOGGER.info(
-                "skipping unnamed room batch source_id=%s chunk_count=%s started_at=%s ended_at=%s",
+                "publishing room batch with diarization fallback labels source_id=%s chunk_count=%s started_at=%s ended_at=%s",
                 chunks[0].source_id,
                 len(chunks),
                 chunks[0].started_at.isoformat(),
                 chunks[-1].ended_at.isoformat(),
             )
-            self._mark_chunks(
-                [chunk.id for chunk in chunks],
-                status=PROCESSED_STATUS,
-                error_message=None,
-            )
-            return True
 
         session = self.session_factory()
         try:
@@ -347,7 +341,7 @@ class PipelineWorker:
                     vendor_segment_id=utterance.vendor_segment_id,
                     text=utterance.text,
                     speaker_hint=utterance.speaker_hint,
-                    speaker_name=utterance.speaker_name,
+                    speaker_name=utterance.speaker_name or utterance.speaker_hint,
                     speaker_confidence=None,
                     confidence=utterance.confidence,
                     started_at=started_at,
