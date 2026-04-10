@@ -207,6 +207,8 @@ class AssemblyAIClient:
     ) -> list[AssemblyAIUtterance]:
         utterances = payload.get("utterances")
         if not isinstance(utterances, list):
+            if _is_empty_completed_transcript(payload):
+                return []
             raise AssemblyAIClientError("AssemblyAI completed response must include an utterances list")
 
         speaker_mapping = _speaker_mapping(payload)
@@ -242,6 +244,21 @@ class AssemblyAIClient:
             )
 
         return parsed
+
+
+def _is_empty_completed_transcript(payload: Mapping[str, Any]) -> bool:
+    if _optional_string(payload.get("text")) is not None:
+        return False
+
+    words = payload.get("words")
+    if words is not None and (not isinstance(words, list) or len(words) > 0):
+        return False
+
+    utterances = payload.get("utterances")
+    if utterances is not None:
+        return False
+
+    return True
 
 
 def _speaker_payload(profile: AssemblyAISpeakerProfile) -> dict[str, Any]:

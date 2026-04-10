@@ -440,7 +440,7 @@ def test_pipeline_worker_keeps_non_room_1_sources_off_assemblyai_path(
     assert canonical.speaker_name == "Dylan"
 
 
-def test_pipeline_worker_room_keeps_unnamed_batch_pending_and_hidden(
+def test_pipeline_worker_room_marks_unnamed_batch_processed_and_hidden(
     session_factory: sessionmaker[Session],
 ) -> None:
     room_chunks = _seed_room_uploaded_chunks(session_factory, count=20)
@@ -480,6 +480,61 @@ def test_pipeline_worker_room_keeps_unnamed_batch_pending_and_hidden(
         now=lambda: datetime(2026, 4, 2, 13, 10, 5, tzinfo=UTC),
     )
 
+    first_result = worker.run_once()
+    second_result = worker.run_once()
+
+    session = session_factory()
+    try:
+        chunks = session.scalars(select(AudioChunk).order_by(AudioChunk.started_at)).all()
+        candidates = session.scalars(select(TranscriptCandidate)).all()
+        canonical = session.scalars(select(CanonicalUtterance)).all()
+    finally:
+        session.close()
+
+    assert first_result.processed_chunks == 20
+    assert first_result.failed_chunks == 0
+    assert first_result.windows == 1
+    assert second_result.processed_chunks == 0
+    assert second_result.failed_chunks == 0
+    assert second_result.windows == 0
+    assert [chunk.status for chunk in chunks] == ["processed"] * 20
+    assert worker.deepgram_client.calls == []
+    assert worker.pyannote_client.calls == []
+    assert [call["audio_bytes"] for call in worker.assemblyai_client.calls] == [stitched_room_audio]
+    assert candidates == []
+    assert canonical == []
+    assert all(chunk.error_message is None for chunk in chunks)
+
+
+def test_pipeline_worker_room_marks_empty_completed_assemblyai_batch_processed(
+    session_factory: sessionmaker[Session],
+) -> None:
+    room_chunks = _seed_room_uploaded_chunks(session_factory, count=20)
+    room_audio_objects: dict[str, bytes] = {}
+    room_frames = b""
+    for index, (_chunk_id, key) in enumerate(room_chunks):
+        wav_bytes, frames = _wav_chunk(index + 1)
+        room_audio_objects[key] = wav_bytes
+        room_frames += frames
+    stitched_room_audio = _wav_bytes(room_frames)
+    worker = PipelineWorker(
+        session_factory=session_factory,
+        s3_client=FakeS3Client(room_audio_objects),
+        deepgram_client=FakeDeepgramClient({}),
+        pyannote_client=FakePyannoteClient({}),
+        assemblyai_client=FakeAssemblyAIClient(
+            {
+                stitched_room_audio: [],
+            }
+        ),
+        room_speakers=ROOM_SPEAKERS,
+        room_assembly_window_seconds=600,
+        room_assembly_idle_flush_seconds=120,
+        room_min_speech_seconds=20.0,
+        measure_room_speech_seconds=lambda _audio_bytes: 25.0,
+        now=lambda: datetime(2026, 4, 2, 13, 10, 5, tzinfo=UTC),
+    )
+
     result = worker.run_once()
 
     session = session_factory()
@@ -490,18 +545,19 @@ def test_pipeline_worker_room_keeps_unnamed_batch_pending_and_hidden(
     finally:
         session.close()
 
-    assert result.processed_chunks == 0
+    assert result.processed_chunks == 20
     assert result.failed_chunks == 0
     assert result.windows == 1
-    assert [chunk.status for chunk in chunks] == ["uploaded"] * 20
+    assert [chunk.status for chunk in chunks] == ["processed"] * 20
     assert worker.deepgram_client.calls == []
     assert worker.pyannote_client.calls == []
     assert [call["audio_bytes"] for call in worker.assemblyai_client.calls] == [stitched_room_audio]
     assert candidates == []
     assert canonical == []
+    assert all(chunk.error_message is None for chunk in chunks)
 
 
-def test_pipeline_worker_room_keeps_room_batch_retryable_without_legacy_fallback_on_assemblyai_error(
+def test_pipeline_worker_marks_room_batch_failed_without_legacy_fallback_on_assemblyai_error(
     session_factory: sessionmaker[Session],
 ) -> None:
     room_chunks = _seed_room_uploaded_chunks(session_factory, count=20)
@@ -530,7 +586,8 @@ def test_pipeline_worker_room_keeps_room_batch_retryable_without_legacy_fallback
         now=lambda: datetime(2026, 4, 2, 13, 10, 5, tzinfo=UTC),
     )
 
-    result = worker.run_once()
+    first_result = worker.run_once()
+    second_result = worker.run_once()
 
     session = session_factory()
     try:
@@ -540,16 +597,19 @@ def test_pipeline_worker_room_keeps_room_batch_retryable_without_legacy_fallback
     finally:
         session.close()
 
-    assert result.processed_chunks == 0
-    assert result.failed_chunks == 0
-    assert result.windows == 1
-    assert [chunk.status for chunk in chunks] == ["uploaded"] * 20
+    assert first_result.processed_chunks == 0
+    assert first_result.failed_chunks == 20
+    assert first_result.windows == 1
+    assert second_result.processed_chunks == 0
+    assert second_result.failed_chunks == 0
+    assert second_result.windows == 0
+    assert [chunk.status for chunk in chunks] == ["failed"] * 20
     assert worker.deepgram_client.calls == []
     assert worker.pyannote_client.calls == []
     assert [call["audio_bytes"] for call in worker.assemblyai_client.calls] == [stitched_room_audio]
     assert candidates == []
     assert canonical == []
-    assert all(chunk.error_message is None for chunk in chunks)
+    assert all(chunk.error_message == "unsupported audio" for chunk in chunks)
 
 
 def test_pipeline_worker_room_skips_low_speech_window_permanently_before_assemblyai(

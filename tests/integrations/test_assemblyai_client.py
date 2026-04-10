@@ -242,6 +242,42 @@ def test_transcribe_bytes_speaker_raises_on_malformed_completed_payload() -> Non
         )
 
 
+def test_transcribe_bytes_speaker_returns_empty_list_for_completed_empty_transcript() -> None:
+    transport = FakeTransport(
+        transcript_responses=[
+            {"id": "tx-empty", "status": "queued"},
+            {
+                "id": "tx-empty",
+                "status": "completed",
+                "text": "",
+                "words": [],
+                "utterances": None,
+                "speech_understanding": {
+                    "response": {
+                        "request": {
+                            "speaker_identification": {
+                                "speaker_type": "name",
+                            }
+                        }
+                    }
+                },
+            },
+        ]
+    )
+    client = AssemblyAIClient(
+        api_key="assembly-secret",
+        transport=transport,
+        poll_interval_seconds=0,
+    )
+
+    utterances = client.transcribe_bytes(
+        b"audio-bytes",
+        speakers=(AssemblyAISpeakerProfile(name="Dylan"),),
+    )
+
+    assert utterances == []
+
+
 def test_transcribe_bytes_speaker_treats_echoed_diarization_labels_as_unnamed() -> None:
     transport = FakeTransport(
         transcript_responses=[

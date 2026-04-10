@@ -147,8 +147,10 @@ class PipelineWorker:
             chunk_ids = [chunk.id for chunk in batch]
             try:
                 processed = self._process_room_batch(chunks=batch)
-            except Exception:
+            except Exception as exc:
                 LOGGER.exception("worker room batch failed chunk_ids=%s", chunk_ids)
+                self._mark_chunks(chunk_ids, status=FAILED_STATUS, error_message=str(exc))
+                failed_chunks += len(chunk_ids)
                 continue
             if processed:
                 processed_chunks += len(chunk_ids)
@@ -298,8 +300,34 @@ class PipelineWorker:
 
         room_speakers = self._load_room_speakers()
         utterances = self.assemblyai_client.transcribe_bytes(audio_bytes, speakers=room_speakers)
+        if not utterances:
+            LOGGER.info(
+                "skipping empty room batch source_id=%s chunk_count=%s started_at=%s ended_at=%s",
+                chunks[0].source_id,
+                len(chunks),
+                chunks[0].started_at.isoformat(),
+                chunks[-1].ended_at.isoformat(),
+            )
+            self._mark_chunks(
+                [chunk.id for chunk in chunks],
+                status=PROCESSED_STATUS,
+                error_message=None,
+            )
+            return True
         if not any(utterance.speaker_name for utterance in utterances):
-            return False
+            LOGGER.info(
+                "skipping unnamed room batch source_id=%s chunk_count=%s started_at=%s ended_at=%s",
+                chunks[0].source_id,
+                len(chunks),
+                chunks[0].started_at.isoformat(),
+                chunks[-1].ended_at.isoformat(),
+            )
+            self._mark_chunks(
+                [chunk.id for chunk in chunks],
+                status=PROCESSED_STATUS,
+                error_message=None,
+            )
+            return True
 
         session = self.session_factory()
         try:
