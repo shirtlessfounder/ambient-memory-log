@@ -61,9 +61,9 @@ def test_openai_room_enrichment_client_resolves_speakers_from_structured_output(
                         "message": {
                             "content": (
                                 '{"utterances": ['
-                                '{"canonical_utterance_id": "utt-1", "resolved_speaker_name": "Dylan", '
+                                '{"utterance_index": 0, "resolved_speaker_name": "Dylan", '
                                 '"resolved_speaker_confidence": 0.94, "resolution_notes": "named turn"},'
-                                '{"canonical_utterance_id": "utt-2", "resolved_speaker_name": "unknown", '
+                                '{"utterance_index": 1, "resolved_speaker_name": "unknown", '
                                 '"resolved_speaker_confidence": 0.44, "resolution_notes": "insufficient evidence"}'
                                 "]}"
                             )
@@ -122,9 +122,9 @@ def test_openai_room_enrichment_client_cleans_text_from_structured_output() -> N
                         "message": {
                             "content": (
                                 '{"utterances": ['
-                                '{"canonical_utterance_id": "utt-1", "cleaned_text": "Ship it after lunch.", '
+                                '{"utterance_index": 0, "cleaned_text": "Ship it after lunch.", '
                                 '"cleaned_text_confidence": 0.82},'
-                                '{"canonical_utterance_id": "utt-2", "cleaned_text": "I can take the follow-up.", '
+                                '{"utterance_index": 1, "cleaned_text": "I can take the follow-up.", '
                                 '"cleaned_text_confidence": 0.73}'
                                 "]}"
                             )
@@ -180,7 +180,7 @@ def test_openai_room_enrichment_client_cleans_text_from_structured_output() -> N
     assert "unknown" in transport.calls[0]["payload"]["messages"][1]["content"]
 
 
-def test_openai_room_enrichment_client_rejects_row_mismatch() -> None:
+def test_openai_room_enrichment_client_rejects_index_mismatch() -> None:
     pipeline = _import_pipeline_module()
     client_module = _import_client_module()
     transport = FakeTransport(
@@ -191,7 +191,7 @@ def test_openai_room_enrichment_client_rejects_row_mismatch() -> None:
                         "message": {
                             "content": (
                                 '{"utterances": ['
-                                '{"canonical_utterance_id": "utt-1", "resolved_speaker_name": "Dylan", '
+                                '{"utterance_index": 0, "resolved_speaker_name": "Dylan", '
                                 '"resolved_speaker_confidence": 0.94, "resolution_notes": "named turn"}'
                                 "]}"
                             )
@@ -228,3 +228,59 @@ def test_openai_room_enrichment_client_rejects_row_mismatch() -> None:
             utterances,
             allowed_speakers=("Dylan", "Niyant", "Alex", "Jakub", "unknown"),
         )
+
+
+def test_openai_room_enrichment_client_maps_rows_by_index_instead_of_uuid_echo() -> None:
+    pipeline = _import_pipeline_module()
+    client_module = _import_client_module()
+    transport = FakeTransport(
+        responses=[
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"utterances": ['
+                                '{"utterance_index": 0, "resolved_speaker_name": "Dylan", '
+                                '"resolved_speaker_confidence": 0.94, "resolution_notes": "named turn"},'
+                                '{"utterance_index": 1, "resolved_speaker_name": "unknown", '
+                                '"resolved_speaker_confidence": 0.44, "resolution_notes": "insufficient evidence"}'
+                                "]}"
+                            )
+                        }
+                    }
+                ]
+            }
+        ]
+    )
+    client = client_module.OpenAIRoomEnrichmentClient(
+        api_key="openai-secret",
+        transport=transport,
+        model="gpt-5.4-mini",
+    )
+    utterances = [
+        pipeline.RoomEnrichmentUtterance(
+            canonical_utterance_id="very-long-uuid-like-id-1",
+            started_at=datetime(2026, 4, 10, 13, 0, tzinfo=UTC),
+            ended_at=datetime(2026, 4, 10, 13, 0, 5, tzinfo=UTC),
+            raw_text="ship it after lunch",
+            current_speaker_label="A",
+        ),
+        pipeline.RoomEnrichmentUtterance(
+            canonical_utterance_id="very-long-uuid-like-id-2",
+            started_at=datetime(2026, 4, 10, 13, 1, tzinfo=UTC),
+            ended_at=datetime(2026, 4, 10, 13, 1, 5, tzinfo=UTC),
+            raw_text="i can take the follow up",
+            current_speaker_label=None,
+        ),
+    ]
+
+    rows = client.resolve_speakers(
+        utterances,
+        allowed_speakers=("Dylan", "Niyant", "Alex", "Jakub", "unknown"),
+    )
+
+    assert [row.canonical_utterance_id for row in rows] == [
+        "very-long-uuid-like-id-1",
+        "very-long-uuid-like-id-2",
+    ]

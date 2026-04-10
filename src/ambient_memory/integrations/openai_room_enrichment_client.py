@@ -110,7 +110,10 @@ class OpenAIRoomEnrichmentClient:
     ) -> list[RoomEnrichmentSpeakerResolution]:
         payload = {
             "allowed_speakers": list(allowed_speakers),
-            "utterances": [_serialize_utterance(utterance) for utterance in utterances],
+            "utterances": [
+                _serialize_utterance(index, utterance)
+                for index, utterance in enumerate(utterances)
+            ],
         }
         response = self._request_completion(
             system_prompt=SPEAKER_RESOLUTION_SYSTEM_PROMPT,
@@ -119,16 +122,16 @@ class OpenAIRoomEnrichmentClient:
             schema=_speaker_resolution_schema(allowed_speakers),
         )
         rows = _parse_output_rows(response)
+        _validate_row_preserving_indices(utterances, rows, stage_name="speaker resolution")
         parsed = [
             RoomEnrichmentSpeakerResolution(
-                canonical_utterance_id=_required_string(row, "canonical_utterance_id"),
+                canonical_utterance_id=utterance.canonical_utterance_id,
                 resolved_speaker_name=_required_string(row, "resolved_speaker_name"),
                 resolved_speaker_confidence=_required_float(row, "resolved_speaker_confidence"),
                 resolution_notes=_optional_string(row.get("resolution_notes")),
             )
-            for row in rows
+            for utterance, row in zip(utterances, rows, strict=True)
         ]
-        _validate_row_preserving(utterances, parsed, stage_name="speaker resolution")
         if any(row.resolved_speaker_name not in allowed_speakers for row in parsed):
             raise OpenAIRoomEnrichmentClientError("speaker resolution returned a disallowed speaker name")
         return parsed
@@ -140,15 +143,19 @@ class OpenAIRoomEnrichmentClient:
         speaker_resolutions: Sequence[RoomEnrichmentSpeakerResolution],
     ) -> list[RoomEnrichmentTextCleanup]:
         payload = {
-            "utterances": [_serialize_utterance(utterance) for utterance in utterances],
+            "utterances": [
+                _serialize_utterance(index, utterance)
+                for index, utterance in enumerate(utterances)
+            ],
             "speaker_resolutions": [
                 {
+                    "utterance_index": index,
                     "canonical_utterance_id": row.canonical_utterance_id,
                     "resolved_speaker_name": row.resolved_speaker_name,
                     "resolved_speaker_confidence": row.resolved_speaker_confidence,
                     "resolution_notes": row.resolution_notes,
                 }
-                for row in speaker_resolutions
+                for index, row in enumerate(speaker_resolutions)
             ],
         }
         response = self._request_completion(
@@ -158,15 +165,15 @@ class OpenAIRoomEnrichmentClient:
             schema=_text_cleanup_schema(),
         )
         rows = _parse_output_rows(response)
+        _validate_row_preserving_indices(utterances, rows, stage_name="text cleanup")
         parsed = [
             RoomEnrichmentTextCleanup(
-                canonical_utterance_id=_required_string(row, "canonical_utterance_id"),
+                canonical_utterance_id=utterance.canonical_utterance_id,
                 cleaned_text=_required_string(row, "cleaned_text"),
                 cleaned_text_confidence=_required_float(row, "cleaned_text_confidence"),
             )
-            for row in rows
+            for utterance, row in zip(utterances, rows, strict=True)
         ]
-        _validate_row_preserving(utterances, parsed, stage_name="text cleanup")
         return parsed
 
     def _request_completion(
@@ -206,8 +213,9 @@ class OpenAIRoomEnrichmentClient:
         return response
 
 
-def _serialize_utterance(utterance: RoomEnrichmentUtterance) -> dict[str, Any]:
+def _serialize_utterance(index: int, utterance: RoomEnrichmentUtterance) -> dict[str, Any]:
     return {
+        "utterance_index": index,
         "canonical_utterance_id": utterance.canonical_utterance_id,
         "started_at": utterance.started_at.isoformat(),
         "ended_at": utterance.ended_at.isoformat(),
@@ -225,13 +233,13 @@ def _speaker_resolution_schema(allowed_speakers: Sequence[str]) -> dict[str, Any
                 "items": {
                     "type": "object",
                     "properties": {
-                        "canonical_utterance_id": {"type": "string"},
+                        "utterance_index": {"type": "integer"},
                         "resolved_speaker_name": {"type": "string", "enum": list(allowed_speakers)},
                         "resolved_speaker_confidence": {"type": "number"},
                         "resolution_notes": {"type": "string"},
                     },
                     "required": [
-                        "canonical_utterance_id",
+                        "utterance_index",
                         "resolved_speaker_name",
                         "resolved_speaker_confidence",
                         "resolution_notes",
@@ -254,12 +262,12 @@ def _text_cleanup_schema() -> dict[str, Any]:
                 "items": {
                     "type": "object",
                     "properties": {
-                        "canonical_utterance_id": {"type": "string"},
+                        "utterance_index": {"type": "integer"},
                         "cleaned_text": {"type": "string"},
                         "cleaned_text_confidence": {"type": "number"},
                     },
                     "required": [
-                        "canonical_utterance_id",
+                        "utterance_index",
                         "cleaned_text",
                         "cleaned_text_confidence",
                     ],
@@ -313,17 +321,17 @@ def _extract_message_content(value: Any) -> str:
     raise OpenAIRoomEnrichmentClientError("OpenAI completion message content must be text")
 
 
-def _validate_row_preserving(
+def _validate_row_preserving_indices(
     utterances: Sequence[RoomEnrichmentUtterance],
-    output_rows: Sequence[RoomEnrichmentSpeakerResolution | RoomEnrichmentTextCleanup],
+    output_rows: Sequence[Mapping[str, Any]],
     *,
     stage_name: str,
 ) -> None:
-    expected_ids = [utterance.canonical_utterance_id for utterance in utterances]
-    actual_ids = [row.canonical_utterance_id for row in output_rows]
-    if actual_ids != expected_ids:
+    expected_indices = list(range(len(utterances)))
+    actual_indices = [_required_index(row, "utterance_index") for row in output_rows]
+    if actual_indices != expected_indices:
         raise OpenAIRoomEnrichmentClientError(
-            f"{stage_name} must stay row-preserving; expected {expected_ids}, got {actual_ids}"
+            f"{stage_name} must stay row-preserving; expected {expected_indices}, got {actual_indices}"
         )
 
 
@@ -347,3 +355,10 @@ def _required_float(row: Mapping[str, Any], field_name: str) -> float:
     if not isinstance(value, int | float):
         raise OpenAIRoomEnrichmentClientError(f"OpenAI completion field {field_name} must be numeric")
     return float(value)
+
+
+def _required_index(row: Mapping[str, Any], field_name: str) -> int:
+    value = row.get(field_name)
+    if not isinstance(value, int):
+        raise OpenAIRoomEnrichmentClientError(f"OpenAI completion field {field_name} must be an integer")
+    return value
