@@ -23,6 +23,7 @@ from ambient_memory.logging import configure_logging
 from ambient_memory.models import AudioChunk, Source, TranscriptCandidate, Voiceprint
 from ambient_memory.pipeline.dedup import DedupCandidate, merge_transcript_candidates, persist_canonical_utterances
 from ambient_memory.pipeline.normalize import normalize_deepgram_response
+from ambient_memory.pipeline.room_speech import measure_speech_seconds
 from ambient_memory.pipeline.room_windows import PendingRoomChunk as PendingRoomWindowChunk, select_room_windows
 from ambient_memory.pipeline.speaker_matching import choose_speaker
 from ambient_memory.pipeline.windows import WindowChunk, group_processing_windows
@@ -47,6 +48,7 @@ class WorkerRuntimeConfig:
     room_speaker_roster_path: str | None = None
     room_assembly_window_seconds: int = 600
     room_assembly_idle_flush_seconds: int = 120
+    room_min_speech_seconds: float = 20.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +86,8 @@ class PipelineWorker:
         room_speakers: tuple[AssemblyAISpeakerProfile, ...] | None = None,
         room_assembly_window_seconds: int = 600,
         room_assembly_idle_flush_seconds: int = 120,
+        room_min_speech_seconds: float = 20.0,
+        measure_room_speech_seconds: Callable[[bytes], float] | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self.session_factory = session_factory
@@ -96,6 +100,8 @@ class PipelineWorker:
         self._room_speakers = room_speakers
         self.room_assembly_window_seconds = room_assembly_window_seconds
         self.room_assembly_idle_flush_seconds = room_assembly_idle_flush_seconds
+        self.room_min_speech_seconds = room_min_speech_seconds
+        self.measure_room_speech_seconds = measure_room_speech_seconds or measure_speech_seconds
         self.now = now or (lambda: datetime.now(UTC))
 
     def run_once(self, *, dry_run: bool = False) -> WorkerRunResult:
@@ -271,8 +277,26 @@ class PipelineWorker:
         if self.assemblyai_client is None:
             raise RuntimeError("AssemblyAI client is not configured")
 
-        room_speakers = self._load_room_speakers()
         audio_bytes = self._stitch_room_audio(chunks)
+        speech_seconds = self.measure_room_speech_seconds(audio_bytes)
+        if speech_seconds < self.room_min_speech_seconds:
+            LOGGER.info(
+                "skipping low-speech room batch source_id=%s chunk_count=%s started_at=%s ended_at=%s speech_seconds=%.2f threshold_seconds=%.2f",
+                chunks[0].source_id,
+                len(chunks),
+                chunks[0].started_at.isoformat(),
+                chunks[-1].ended_at.isoformat(),
+                speech_seconds,
+                self.room_min_speech_seconds,
+            )
+            self._mark_chunks(
+                [chunk.id for chunk in chunks],
+                status=PROCESSED_STATUS,
+                error_message=None,
+            )
+            return True
+
+        room_speakers = self._load_room_speakers()
         utterances = self.assemblyai_client.transcribe_bytes(audio_bytes, speakers=room_speakers)
         if not any(utterance.speaker_name for utterance in utterances):
             return False
@@ -677,6 +701,7 @@ def run_worker_once(*, dry_run: bool = False, env_file: str | None = None) -> Wo
             room_speaker_roster_path=config.room_speaker_roster_path,
             room_assembly_window_seconds=config.room_assembly_window_seconds,
             room_assembly_idle_flush_seconds=config.room_assembly_idle_flush_seconds,
+            room_min_speech_seconds=config.room_min_speech_seconds,
         )
         return worker.run_once(dry_run=True)
 
@@ -714,6 +739,7 @@ def build_worker(config: WorkerRuntimeConfig) -> PipelineWorker:
         room_speaker_roster_path=config.room_speaker_roster_path,
         room_assembly_window_seconds=config.room_assembly_window_seconds,
         room_assembly_idle_flush_seconds=config.room_assembly_idle_flush_seconds,
+        room_min_speech_seconds=config.room_min_speech_seconds,
     )
 
 
@@ -744,6 +770,7 @@ def load_worker_runtime_config(*, dry_run: bool, env_file: str | None = None) ->
             room_speaker_roster_path=settings.room_speaker_roster_path,
             room_assembly_window_seconds=settings.room_assembly_window_seconds,
             room_assembly_idle_flush_seconds=settings.room_assembly_idle_flush_seconds,
+            room_min_speech_seconds=settings.room_min_speech_seconds,
         )
 
     required = {
@@ -767,6 +794,7 @@ def load_worker_runtime_config(*, dry_run: bool, env_file: str | None = None) ->
         room_speaker_roster_path=required["ROOM_SPEAKER_ROSTER_PATH"],
         room_assembly_window_seconds=settings.room_assembly_window_seconds,
         room_assembly_idle_flush_seconds=settings.room_assembly_idle_flush_seconds,
+        room_min_speech_seconds=settings.room_min_speech_seconds,
     )
 
 

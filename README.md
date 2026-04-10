@@ -16,6 +16,8 @@ Raw capture, S3 storage, canonical utterance storage, search, and replay stay th
 
 For `room-1`, raw capture and upload still happen every `30s`. Publication is delayed on purpose: the worker batches contiguous room chunks into `ROOM_ASSEMBLY_WINDOW_SECONDS` windows (default `600`), can idle-flush a shorter trailing span after `ROOM_ASSEMBLY_IDLE_FLUSH_SECONDS` (default `120`), and writes room transcript/search output only after `AssemblyAI` returns at least one real roster name from `ROOM_SPEAKER_ROSTER_PATH`. Bare diarization labels like `A/B/C` are treated as hints, not surfaced speaker names.
 
+There are now two separate dead-air controls. First, capture can skip obviously silent `30s` chunks locally with the upload-time silence filter. Second, before `room-1` hits `AssemblyAI`, the worker measures speech-like activity on the stitched room window. If speech is below `ROOM_MIN_SPEECH_SECONDS` (default `20`), that room window is skipped permanently, never sent to `AssemblyAI`, and does not retry.
+
 ## Commands
 
 - `uv run ambient-memory list-devices`

@@ -245,6 +245,8 @@ def test_pipeline_worker_room_keeps_short_room_window_pending_and_hidden_until_r
         room_speakers=ROOM_SPEAKERS,
         room_assembly_window_seconds=600,
         room_assembly_idle_flush_seconds=120,
+        room_min_speech_seconds=20.0,
+        measure_room_speech_seconds=lambda _audio_bytes: 25.0,
         now=lambda: datetime(2026, 4, 2, 13, 1, 31, tzinfo=UTC),
     )
 
@@ -307,6 +309,8 @@ def test_pipeline_worker_room_publishes_named_room_batch_when_ready(
         room_speakers=ROOM_SPEAKERS,
         room_assembly_window_seconds=600,
         room_assembly_idle_flush_seconds=120,
+        room_min_speech_seconds=20.0,
+        measure_room_speech_seconds=lambda _audio_bytes: 25.0,
         now=lambda: datetime(2026, 4, 2, 13, 10, 5, tzinfo=UTC),
     )
 
@@ -471,6 +475,8 @@ def test_pipeline_worker_room_keeps_unnamed_batch_pending_and_hidden(
         room_speakers=ROOM_SPEAKERS,
         room_assembly_window_seconds=600,
         room_assembly_idle_flush_seconds=120,
+        room_min_speech_seconds=20.0,
+        measure_room_speech_seconds=lambda _audio_bytes: 25.0,
         now=lambda: datetime(2026, 4, 2, 13, 10, 5, tzinfo=UTC),
     )
 
@@ -519,6 +525,8 @@ def test_pipeline_worker_room_keeps_room_batch_retryable_without_legacy_fallback
         room_speakers=ROOM_SPEAKERS,
         room_assembly_window_seconds=600,
         room_assembly_idle_flush_seconds=120,
+        room_min_speech_seconds=20.0,
+        measure_room_speech_seconds=lambda _audio_bytes: 25.0,
         now=lambda: datetime(2026, 4, 2, 13, 10, 5, tzinfo=UTC),
     )
 
@@ -542,6 +550,110 @@ def test_pipeline_worker_room_keeps_room_batch_retryable_without_legacy_fallback
     assert candidates == []
     assert canonical == []
     assert all(chunk.error_message is None for chunk in chunks)
+
+
+def test_pipeline_worker_room_skips_low_speech_window_permanently_before_assemblyai(
+    session_factory: sessionmaker[Session],
+) -> None:
+    room_chunks = _seed_room_uploaded_chunks(session_factory, count=20)
+    room_audio_objects: dict[str, bytes] = {}
+    for index, (_chunk_id, key) in enumerate(room_chunks):
+        room_audio_objects[key] = _wav_chunk(index + 1)[0]
+
+    worker = PipelineWorker(
+        session_factory=session_factory,
+        s3_client=FakeS3Client(room_audio_objects),
+        deepgram_client=FakeDeepgramClient({}),
+        pyannote_client=FakePyannoteClient({}),
+        assemblyai_client=FakeAssemblyAIClient({}),
+        room_speakers=ROOM_SPEAKERS,
+        room_assembly_window_seconds=600,
+        room_assembly_idle_flush_seconds=120,
+        room_min_speech_seconds=20.0,
+        measure_room_speech_seconds=lambda _audio_bytes: 5.0,
+        now=lambda: datetime(2026, 4, 2, 13, 10, 5, tzinfo=UTC),
+    )
+
+    result = worker.run_once()
+
+    session = session_factory()
+    try:
+        chunks = session.scalars(select(AudioChunk).order_by(AudioChunk.started_at)).all()
+        candidates = session.scalars(select(TranscriptCandidate)).all()
+        canonical = session.scalars(select(CanonicalUtterance)).all()
+    finally:
+        session.close()
+
+    assert result.processed_chunks == 20
+    assert result.failed_chunks == 0
+    assert result.windows == 1
+    assert [chunk.status for chunk in chunks] == ["processed"] * 20
+    assert worker.deepgram_client.calls == []
+    assert worker.pyannote_client.calls == []
+    assert worker.assemblyai_client.calls == []
+    assert candidates == []
+    assert canonical == []
+    assert all(chunk.error_message is None for chunk in chunks)
+
+
+def test_pipeline_worker_room_calls_assemblyai_when_speech_meets_threshold(
+    session_factory: sessionmaker[Session],
+) -> None:
+    room_chunks = _seed_room_uploaded_chunks(session_factory, count=20)
+    room_audio_objects: dict[str, bytes] = {}
+    room_frames = b""
+    for index, (_chunk_id, key) in enumerate(room_chunks):
+        wav_bytes, frames = _wav_chunk(index + 1)
+        room_audio_objects[key] = wav_bytes
+        room_frames += frames
+    stitched_room_audio = _wav_bytes(room_frames)
+
+    worker = PipelineWorker(
+        session_factory=session_factory,
+        s3_client=FakeS3Client(room_audio_objects),
+        deepgram_client=FakeDeepgramClient({}),
+        pyannote_client=FakePyannoteClient({}),
+        assemblyai_client=FakeAssemblyAIClient(
+            {
+                stitched_room_audio: [
+                    AssemblyAIUtterance(
+                        vendor_segment_id="utt-room",
+                        text="Threshold passed room turn.",
+                        speaker_hint="A",
+                        speaker_name="Dylan",
+                        confidence=0.91,
+                        start_seconds=30.0,
+                        end_seconds=60.0,
+                        raw_payload={"speaker": "Dylan"},
+                    )
+                ]
+            }
+        ),
+        room_speakers=ROOM_SPEAKERS,
+        room_assembly_window_seconds=600,
+        room_assembly_idle_flush_seconds=120,
+        room_min_speech_seconds=20.0,
+        measure_room_speech_seconds=lambda _audio_bytes: 25.0,
+        now=lambda: datetime(2026, 4, 2, 13, 10, 5, tzinfo=UTC),
+    )
+
+    result = worker.run_once()
+
+    session = session_factory()
+    try:
+        chunks = session.scalars(select(AudioChunk).order_by(AudioChunk.started_at)).all()
+        candidates = session.scalars(select(TranscriptCandidate)).all()
+        canonical = session.scalars(select(CanonicalUtterance)).all()
+    finally:
+        session.close()
+
+    assert result.processed_chunks == 20
+    assert result.failed_chunks == 0
+    assert result.windows == 1
+    assert [chunk.status for chunk in chunks] == ["processed"] * 20
+    assert [call["audio_bytes"] for call in worker.assemblyai_client.calls] == [stitched_room_audio]
+    assert len(candidates) == 1
+    assert len(canonical) == 1
 
 
 def test_pipeline_worker_keeps_exact_text_with_conflicting_named_speakers_separate(

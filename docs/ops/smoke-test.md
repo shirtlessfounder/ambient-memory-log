@@ -5,7 +5,7 @@ Goal: prove one source can capture audio, upload a chunk, process it, surface it
 ## Before You Start
 
 - Work from `/Users/your-user/Projects/ambient-memory-log`.
-- Fill `.env` with the shared database, S3, and API keys from `.env.example`. If you are validating the room path, make sure the worker env also includes `DEEPGRAM_API_KEY`, `PYANNOTE_API_KEY`, `ASSEMBLYAI_API_KEY`, `ROOM_SPEAKER_ROSTER_PATH=./config/room-speakers.json`, `ROOM_ASSEMBLY_WINDOW_SECONDS=600`, and `ROOM_ASSEMBLY_IDLE_FLUSH_SECONDS=120`.
+- Fill `.env` with the shared database, S3, and API keys from `.env.example`. If you are validating the room path, make sure the worker env also includes `DEEPGRAM_API_KEY`, `PYANNOTE_API_KEY`, `ASSEMBLYAI_API_KEY`, `ROOM_SPEAKER_ROSTER_PATH=./config/room-speakers.json`, `ROOM_ASSEMBLY_WINDOW_SECONDS=600`, `ROOM_ASSEMBLY_IDLE_FLUSH_SECONDS=120`, and `ROOM_MIN_SPEECH_SECONDS=20`.
 - Install `ffmpeg`, `jq`, and `psql`.
 - Pick a searchable phrase for the live capture, such as `ambient smoke test alpha`.
 
@@ -118,6 +118,7 @@ Expected result:
 - a fresh `room-1` upload does not create immediate searchable room output
 - room transcript/canonical rows can lag by roughly `10` minutes during continuous speech because the worker waits for a `ROOM_ASSEMBLY_WINDOW_SECONDS` batch
 - if the room goes quiet, a shorter trailing span can flush after `ROOM_ASSEMBLY_IDLE_FLUSH_SECONDS`
+- if that stitched room window has less than `ROOM_MIN_SPEECH_SECONDS` of speech-like activity, the worker skips it before `AssemblyAI` and does not retry it
 
 After about `10` minutes of contiguous room audio, or after an idle flush:
 

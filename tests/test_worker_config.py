@@ -13,6 +13,7 @@ def _clear_worker_env(monkeypatch) -> None:
     monkeypatch.delenv("ROOM_SPEAKER_ROSTER_PATH", raising=False)
     monkeypatch.delenv("ROOM_ASSEMBLY_WINDOW_SECONDS", raising=False)
     monkeypatch.delenv("ROOM_ASSEMBLY_IDLE_FLUSH_SECONDS", raising=False)
+    monkeypatch.delenv("ROOM_MIN_SPEECH_SECONDS", raising=False)
 
 
 def test_worker_dry_run_config_loads_database_url_from_dotenv(tmp_path, monkeypatch) -> None:
@@ -138,4 +139,61 @@ def test_worker_runtime_config_rejects_non_positive_room_window_settings(tmp_pat
     _clear_worker_env(monkeypatch)
 
     with pytest.raises(Exception, match="ROOM_ASSEMBLY_WINDOW_SECONDS|room_assembly_window_seconds"):
+        load_worker_runtime_config(dry_run=False, env_file=".env.worker")
+
+
+def test_worker_runtime_config_defaults_room_min_speech_seconds_in_dry_run(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("DATABASE_URL=postgresql://db.example/app\n", encoding="utf-8")
+    _clear_worker_env(monkeypatch)
+
+    config = load_worker_runtime_config(dry_run=True)
+
+    assert config.room_min_speech_seconds == 20.0
+
+
+def test_worker_runtime_config_loads_room_min_speech_seconds_for_non_dry_run(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env.worker").write_text(
+        "\n".join(
+            (
+                "DATABASE_URL=postgresql://db.example/worker",
+                "AWS_REGION=us-east-1",
+                "DEEPGRAM_API_KEY=deepgram-secret",
+                "PYANNOTE_API_KEY=pyannote-secret",
+                "ASSEMBLYAI_API_KEY=assembly-secret",
+                "ROOM_SPEAKER_ROSTER_PATH=./config/room-speakers.json",
+                "ROOM_MIN_SPEECH_SECONDS=45",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _clear_worker_env(monkeypatch)
+
+    config = load_worker_runtime_config(dry_run=False, env_file=".env.worker")
+
+    assert config.room_min_speech_seconds == 45.0
+
+
+def test_worker_runtime_config_rejects_non_positive_room_min_speech_seconds(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env.worker").write_text(
+        "\n".join(
+            (
+                "DATABASE_URL=postgresql://db.example/worker",
+                "AWS_REGION=us-east-1",
+                "DEEPGRAM_API_KEY=deepgram-secret",
+                "PYANNOTE_API_KEY=pyannote-secret",
+                "ASSEMBLYAI_API_KEY=assembly-secret",
+                "ROOM_SPEAKER_ROSTER_PATH=./config/room-speakers.json",
+                "ROOM_MIN_SPEECH_SECONDS=0",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _clear_worker_env(monkeypatch)
+
+    with pytest.raises(Exception, match="ROOM_MIN_SPEECH_SECONDS|room_min_speech_seconds"):
         load_worker_runtime_config(dry_run=False, env_file=".env.worker")

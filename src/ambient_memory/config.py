@@ -82,6 +82,7 @@ class WorkerSettings(DatabaseSettings):
         alias="ROOM_ASSEMBLY_IDLE_FLUSH_SECONDS",
         gt=0,
     )
+    room_min_speech_seconds: float = Field(default=20.0, alias="ROOM_MIN_SPEECH_SECONDS", gt=0)
 
     model_config = COMMON_MODEL_CONFIG
 
