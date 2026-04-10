@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.ambient-memory.room-enrichment</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>cd "$HOME/Projects/ambient-memory-log" &amp;&amp; exec /usr/bin/lockf -s -t 0 -k /tmp/ambient-memory.room-enrichment.lock env -u OPENAI_API_KEY uv run ambient-memory enrich-room --hours 4 --source-id room-1 --resolver-version room-v2-audio-identity-v1</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StartInterval</key>
+  <integer>600</integer>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/ambient-memory.room-enrichment.stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/tmp/ambient-memory.room-enrichment.stderr.log</string>
+</dict>
+</plist>
