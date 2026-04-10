@@ -91,13 +91,14 @@ def _build_transcription_request(
     model: str,
 ) -> Request:
     boundary = f"ambient-memory-{uuid4().hex}"
-    response_format = _response_format_for_model(model)
+    fields = (
+        ("model", model),
+        ("response_format", _response_format_for_model(model)),
+        *_optional_chunking_strategy_field(model),
+    )
     body = _multipart_body(
         boundary=boundary,
-        fields=(
-            ("model", model),
-            ("response_format", response_format),
-        ),
+        fields=fields,
         file_field_name="file",
         filename=filename,
         content_type=content_type,
@@ -176,6 +177,12 @@ def _response_format_for_model(model: str) -> str:
     if "diarize" in model:
         return "diarized_json"
     return "verbose_json"
+
+
+def _optional_chunking_strategy_field(model: str) -> tuple[tuple[str, str], ...]:
+    if "diarize" in model:
+        return (("chunking_strategy", "auto"),)
+    return ()
 
 
 def _multipart_body(

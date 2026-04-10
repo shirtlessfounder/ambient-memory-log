@@ -97,6 +97,25 @@ def test_openai_room_retranscription_client_posts_multipart_diarized_request_and
     assert "diarized_json" in body
 
 
+def test_openai_room_retranscription_client_posts_chunking_strategy_for_diarization_model() -> None:
+    client_module = _import_client_module()
+    transport = FakeTransport(responses=[b'{"segments": []}'])
+    client = client_module.OpenAIRoomRetranscriptionClient(
+        api_key="openai-secret",
+        transport=transport,
+    )
+
+    client.transcribe_window(
+        audio_bytes=b"RIFF-fake-window-audio",
+        filename="room-window.wav",
+        window_started_at=datetime(2026, 4, 10, 13, 0, tzinfo=UTC),
+    )
+
+    body = transport.requests[0].data.decode("utf-8", errors="replace")
+    assert 'name="chunking_strategy"' in body
+    assert "auto" in body
+
+
 def test_openai_room_retranscription_client_raises_on_transport_failure() -> None:
     client_module = _import_client_module()
     client = client_module.OpenAIRoomRetranscriptionClient(
