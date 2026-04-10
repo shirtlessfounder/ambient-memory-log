@@ -142,10 +142,16 @@ def test_env_example_mentions_assemblyai_api_key() -> None:
     assert "ASSEMBLYAI_API_KEY" in text
 
 
-def test_env_example_mentions_openai_api_key_for_room_enrichment() -> None:
+def test_env_example_mentions_room_v2_enrichment_envs() -> None:
     text = _read(".env.example")
 
     assert "OPENAI_API_KEY" in text
+    assert "OPENAI_AUDIO_TRANSCRIBE_MODEL" in text
+    assert "PYANNOTE_API_KEY" in text
+    assert "AWS_REGION" in text
+    assert "ROOM_TRACK_MIN_SPEECH_SECONDS" in text
+    assert "ROOM_TRACK_MATCH_THRESHOLD" in text
+    assert "ROOM_TRACK_MATCH_MARGIN" in text
 
 
 def test_env_example_mentions_room_window_settings() -> None:
@@ -231,6 +237,19 @@ def test_readme_mentions_room_enrichment_command() -> None:
     assert "enrich-room" in text
     assert "--hours 4" in text
     assert "openai_api_key" in text
+    assert "openai_audio_transcribe_model" in text
+    assert "pyannote_api_key" in text
+    assert "room_track_min_speech_seconds" in text
+    assert "room_track_match_threshold" in text
+    assert "room_track_match_margin" in text
+    assert "room-v2-audio-identity-v1" in text
+    assert "audio-track identity" in text
+    assert "audio-aware retranscription" in text
+    assert "raw canonical" in text
+    assert "unchanged" in text
+    assert "idempotent" in text
+    assert "text-only" in text
+    assert "superseded" in text
 
 
 def test_ops_machine_setup_mentions_room_enrichment_command() -> None:
@@ -239,6 +258,19 @@ def test_ops_machine_setup_mentions_room_enrichment_command() -> None:
     assert "enrich-room" in text
     assert "openai_api_key" in text
     assert "4h" in text or "4 hours" in text
+    assert "openai_audio_transcribe_model" in text
+    assert "pyannote_api_key" in text
+    assert "room_track_min_speech_seconds" in text
+    assert "room_track_match_threshold" in text
+    assert "room_track_match_margin" in text
+    assert "room-v2-audio-identity-v1" in text
+    assert "audio-track identity" in text
+    assert "audio-aware retranscription" in text
+    assert "raw canonical" in text
+    assert "unchanged" in text
+    assert "idempotent" in text
+    assert "text-only" in text
+    assert "superseded" in text
 
 
 def test_readme_explains_launchd_background_startup() -> None:

@@ -52,10 +52,14 @@ Set these values in `.env.worker`:
 - `PYANNOTE_API_KEY`
 - `ASSEMBLYAI_API_KEY`
 - `OPENAI_API_KEY`
+- `OPENAI_AUDIO_TRANSCRIBE_MODEL`, default `gpt-4o-transcribe-diarize`
 - `ROOM_SPEAKER_ROSTER_PATH`, usually `./config/room-speakers.json`
 - `ROOM_ASSEMBLY_WINDOW_SECONDS=600`
 - `ROOM_ASSEMBLY_IDLE_FLUSH_SECONDS=120`
 - `ROOM_MIN_SPEECH_SECONDS=20`
+- `ROOM_TRACK_MIN_SPEECH_SECONDS=8.0`
+- `ROOM_TRACK_MATCH_THRESHOLD=0.75`
+- `ROOM_TRACK_MATCH_MARGIN=0.15`
 
 Set these values in `.env.api`:
 
@@ -119,7 +123,7 @@ For `room-1`, that worker path is intentionally delayed. Raw room chunks still u
 
 That delayed room path now has its own cost-control gate too. After the `600s` room window is stitched, but before `AssemblyAI` is called, the worker measures approximate speech duration across the whole window. If the result is below `ROOM_MIN_SPEECH_SECONDS`, the worker skips that room window, marks those chunks done, and does not retry it.
 
-There is also a separate run-once second-pass room enrichment command. It reads only recent canonical `room-1` utterances, keeps raw canonical `text`, `speaker_name`, and timestamps unchanged, and writes inferred speaker cleanup into a separate enrichment table. The intended first live pass is the most recent `4h`.
+There is also a separate run-once room-v2 enrichment command. It uses audio-track identity plus audio-aware retranscription over recent canonical `room-1` utterances, keeps raw canonical rows unchanged, and writes inferred speaker identity plus inferred transcript text into a separate enrichment table. The older text-only room relabeler is superseded by this room-v2 path for room evaluation, and re-running the same resolver version is idempotent. The intended first live pass is the most recent `4h`.
 
 This doc assumes the shared database and bucket already exist.
 
@@ -213,10 +217,10 @@ If you want the delayed second-pass cleanup over recent room transcript data, ru
 
 ```bash
 cd "$HOME/Projects/ambient-memory-log"
-uv run ambient-memory enrich-room --hours 4 --source-id room-1 --resolver-version openai-room-v1
+uv run ambient-memory enrich-room --hours 4 --source-id room-1 --resolver-version room-v2-audio-identity-v1
 ```
 
-Use `--dry-run` first if you only want the recent `4 hours` scope summary. Rerunning the same `--resolver-version` is idempotent for already-enriched canonical utterances.
+Use `--dry-run` first if you only want the recent `4 hours` scope summary. This command depends on `OPENAI_API_KEY`, `OPENAI_AUDIO_TRANSCRIBE_MODEL`, `PYANNOTE_API_KEY`, `AWS_REGION`, `ROOM_TRACK_MIN_SPEECH_SECONDS`, `ROOM_TRACK_MATCH_THRESHOLD`, and `ROOM_TRACK_MATCH_MARGIN`. Rerunning the same `--resolver-version` is idempotent for already-enriched canonical utterances.
 
 ## 4. Run The API
 

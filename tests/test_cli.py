@@ -411,10 +411,25 @@ def test_cli_enrich_room_defaults_to_recent_four_hours(monkeypatch) -> None:
     assert calls == {
         "hours": 4,
         "source_id": "room-1",
-        "resolver_version": "openai-room-v1",
+        "resolver_version": "room-v2-audio-identity-v1",
         "dry_run": False,
     }
     assert "Created 12 enrichment row(s) for 12 utterance(s) across 2 window(s)" in result.output
+
+
+def test_cli_enrich_room_help_describes_room_v2_behavior() -> None:
+    result = runner.invoke(app, ["enrich-room", "--help"])
+
+    assert result.exit_code == 0
+    text = result.output.lower()
+
+    assert "audio-track identity" in text
+    assert "audio-aware retranscription" in text
+    assert "raw canonical rows" in text
+    assert "unchanged" in text
+    assert "same-version" in text
+    assert "idempotent" in text
+    assert "room-v2-audio-identity-v1" in text
 
 
 def test_cli_enrich_room_dry_run_reports_scope_without_writing(monkeypatch) -> None:

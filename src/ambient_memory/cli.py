@@ -503,11 +503,15 @@ def enrich_room(
     resolver_version: str = Option(
         DEFAULT_ROOM_ENRICHMENT_RESOLVER_VERSION,
         "--resolver-version",
-        help="Resolver version label stored with enrichment rows.",
+        help="Resolver version label stored with inferred enrichment rows; same-version reruns stay idempotent.",
     ),
-    dry_run: bool = Option(False, "--dry-run", help="Report recent room enrichment scope without writing rows."),
+    dry_run: bool = Option(
+        False,
+        "--dry-run",
+        help="Report recent room-v2 scope without writing inferred rows; raw canonical rows remain unchanged.",
+    ),
 ) -> None:
-    """Run bounded second-pass enrichment for room canonical utterances."""
+    """Run room v2 audio-track identity and audio-aware retranscription for recent room canonical utterances."""
     result = run_room_enrichment(
         hours=hours,
         source_id=source_id,
