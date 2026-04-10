@@ -89,6 +89,15 @@ class WorkerSettings(DatabaseSettings):
 
 class RoomEnrichmentSettings(DatabaseSettings):
     openai_api_key: str = Field(alias="OPENAI_API_KEY")
+    aws_region: str = Field(alias="AWS_REGION")
+    pyannote_api_key: str = Field(alias="PYANNOTE_API_KEY")
+    openai_audio_transcribe_model: str = Field(
+        default="gpt-4o-transcribe-diarize",
+        alias="OPENAI_AUDIO_TRANSCRIBE_MODEL",
+    )
+    room_track_min_speech_seconds: float = Field(default=8.0, alias="ROOM_TRACK_MIN_SPEECH_SECONDS", gt=0)
+    room_track_match_threshold: float = Field(default=0.75, alias="ROOM_TRACK_MATCH_THRESHOLD", ge=0, le=1)
+    room_track_match_margin: float = Field(default=0.15, alias="ROOM_TRACK_MATCH_MARGIN", ge=0, le=1)
 
     model_config = COMMON_MODEL_CONFIG
 
