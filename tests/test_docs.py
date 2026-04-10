@@ -59,6 +59,7 @@ def test_teammate_setup_doc_mentions_env_launchctl_and_logs() -> None:
     text = _read("docs/teammate-setup.md").lower()
 
     assert ".env.teammate" in text
+    assert "aws configure" in text
     assert "capture_device_name" in text
     assert "launchctl" in text
     assert "log" in text
@@ -69,6 +70,7 @@ def test_teammate_setup_doc_covers_install_validation_voiceprint_and_service_flo
 
     assert "uv sync" in text
     assert "ffmpeg" in text
+    assert "awscli" in text.lower()
     assert "ambient-memory list-devices" in text
     assert "ambient-memory start-teammate --dry-run" in text
     assert "voiceprint-live" in text
@@ -118,6 +120,16 @@ def test_dual_capture_launchd_template_references_wrapper_script() -> None:
     assert "<key>StandardErrorPath</key>" in text
 
 
+def test_capture_launchd_templates_use_interactive_process_type_for_audio_capture() -> None:
+    capture_text = _read("deploy/launchd/com.ambient-memory.capture-agent.plist")
+    dual_text = _read("deploy/launchd/com.ambient-memory.dual-capture.plist")
+
+    assert "<key>ProcessType</key>" in capture_text
+    assert "<string>Interactive</string>" in capture_text
+    assert "<key>ProcessType</key>" in dual_text
+    assert "<string>Interactive</string>" in dual_text
+
+
 def test_env_example_mentions_capture_device_name() -> None:
     text = _read(".env.example")
 
@@ -128,6 +140,12 @@ def test_env_example_mentions_assemblyai_api_key() -> None:
     text = _read(".env.example")
 
     assert "ASSEMBLYAI_API_KEY" in text
+
+
+def test_env_example_mentions_openai_api_key_for_room_enrichment() -> None:
+    text = _read(".env.example")
+
+    assert "OPENAI_API_KEY" in text
 
 
 def test_env_example_mentions_room_window_settings() -> None:
@@ -143,6 +161,42 @@ def test_env_example_mentions_silence_filter_settings() -> None:
 
     assert "SILENCE_FILTER_ENABLED" in text
     assert "SILENCE_MAX_VOLUME_DB" in text
+
+
+def test_env_example_mentions_room_min_speech_seconds() -> None:
+    text = _read(".env.example")
+
+    assert "ROOM_MIN_SPEECH_SECONDS" in text
+
+
+def test_readme_explains_room_window_speech_gate() -> None:
+    text = _read("README.md").lower()
+
+    assert "room_min_speech_seconds" in text
+    assert "20" in text
+    assert "assemblyai" in text
+    assert "skip" in text
+    assert "30s" in text
+    assert "silence filter" in text
+
+
+def test_ops_machine_setup_doc_mentions_room_window_speech_gate() -> None:
+    text = _read("docs/ops-machine-setup.md").lower()
+
+    assert "room_min_speech_seconds" in text
+    assert "20" in text
+    assert "skip" in text
+    assert "assemblyai" in text
+    assert "do not retry" in text or "does not retry" in text
+
+
+def test_smoke_test_doc_mentions_room_window_speech_gate() -> None:
+    text = _read("docs/ops/smoke-test.md").lower()
+
+    assert "room_min_speech_seconds" in text
+    assert "20" in text
+    assert "skip" in text
+    assert "assemblyai" in text
 
 
 def test_readme_links_teammate_and_ops_machine_setup_docs() -> None:
@@ -169,6 +223,22 @@ def test_readme_explains_room_1_assemblyai_path() -> None:
     assert "delayed" in text
     assert "room_speaker_roster_path" in text
     assert "a/b/c" in text
+
+
+def test_readme_mentions_room_enrichment_command() -> None:
+    text = _read("README.md").lower()
+
+    assert "enrich-room" in text
+    assert "--hours 4" in text
+    assert "openai_api_key" in text
+
+
+def test_ops_machine_setup_mentions_room_enrichment_command() -> None:
+    text = _read("docs/ops-machine-setup.md").lower()
+
+    assert "enrich-room" in text
+    assert "openai_api_key" in text
+    assert "4h" in text or "4 hours" in text
 
 
 def test_readme_explains_launchd_background_startup() -> None:
@@ -231,6 +301,15 @@ def test_teammate_setup_doc_mentions_conservative_silence_filter_behavior() -> N
     assert "quiet speech" in text
 
 
+def test_teammate_setup_doc_mentions_local_aws_credentials_for_s3_uploads() -> None:
+    text = _read("docs/teammate-setup.md").lower()
+
+    assert "s3" in text
+    assert "aws configure" in text
+    assert "unable to locate credentials" in text
+    assert "retry/" in text
+
+
 def test_teammate_setup_doc_explains_one_time_launchd_setup() -> None:
     text = _read("docs/teammate-setup.md").lower()
 
@@ -253,3 +332,13 @@ def test_ops_machine_setup_doc_explains_launchd_as_background_service_flow() -> 
     assert "one-time" in text
     assert "launchd" in text
     assert "terminal" in text
+
+
+def test_capture_docs_explain_interactive_launchd_requirement_for_mic_capture() -> None:
+    teammate_text = _read("docs/teammate-setup.md").lower()
+    ops_text = _read("docs/ops-machine-setup.md").lower()
+
+    assert "interactive" in teammate_text
+    assert "interactive" in ops_text
+    assert "mic capture" in teammate_text
+    assert "mic capture" in ops_text

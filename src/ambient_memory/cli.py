@@ -20,6 +20,10 @@ from ambient_memory.db import count_audio_chunks_for_source, create_voiceprint, 
 from ambient_memory.enrollment.live import run_live_voiceprint_enrollment
 from ambient_memory.importing.recordings import derive_source_id, run_recording_import
 from ambient_memory.integrations.pyannote_client import PyannoteClient
+from ambient_memory.pipeline.room_enrichment import (
+    DEFAULT_ROOM_ENRICHMENT_RESOLVER_VERSION,
+    run_room_enrichment,
+)
 from ambient_memory.pipeline.worker import run_worker_loop, run_worker_once
 
 
@@ -68,6 +72,21 @@ def _render_worker_run_once_result(result: object, *, dry_run: bool) -> None:
         "Processed "
         f"{result.processed_chunks} chunk(s) across {result.windows} window(s); "
         f"failed {result.failed_chunks}"
+    )
+
+
+def _render_room_enrichment_result(result: object, *, dry_run: bool) -> None:
+    if dry_run:
+        print(
+            "Dry run: "
+            f"{result.utterances} utterance(s) across {result.windows} window(s) "
+            f"would be processed for {result.source_id} over the last {result.hours}h"
+        )
+        return
+
+    print(
+        f"Created {result.created} enrichment row(s) "
+        f"for {result.utterances} utterance(s) across {result.windows} window(s)"
     )
 
 
@@ -475,6 +494,27 @@ def start_worker(
 ) -> None:
     """Start the worker using .env.worker."""
     run_worker_loop(poll_seconds=poll_seconds, env_file=".env.worker")
+
+
+@app.command("enrich-room")
+def enrich_room(
+    hours: int = Option(4, "--hours", min=1, help="Only enrich canonical utterances from the last N hours."),
+    source_id: str = Option("room-1", "--source-id", help="Canonical source id to enrich."),
+    resolver_version: str = Option(
+        DEFAULT_ROOM_ENRICHMENT_RESOLVER_VERSION,
+        "--resolver-version",
+        help="Resolver version label stored with enrichment rows.",
+    ),
+    dry_run: bool = Option(False, "--dry-run", help="Report recent room enrichment scope without writing rows."),
+) -> None:
+    """Run bounded second-pass enrichment for room canonical utterances."""
+    result = run_room_enrichment(
+        hours=hours,
+        source_id=source_id,
+        resolver_version=resolver_version,
+        dry_run=dry_run,
+    )
+    _render_room_enrichment_result(result, dry_run=dry_run)
 
 
 def _start_api_server(

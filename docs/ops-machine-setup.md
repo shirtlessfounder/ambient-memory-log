@@ -51,9 +51,11 @@ Set these values in `.env.worker`:
 - `DEEPGRAM_API_KEY`
 - `PYANNOTE_API_KEY`
 - `ASSEMBLYAI_API_KEY`
+- `OPENAI_API_KEY`
 - `ROOM_SPEAKER_ROSTER_PATH`, usually `./config/room-speakers.json`
 - `ROOM_ASSEMBLY_WINDOW_SECONDS=600`
 - `ROOM_ASSEMBLY_IDLE_FLUSH_SECONDS=120`
+- `ROOM_MIN_SPEECH_SECONDS=20`
 
 Set these values in `.env.api`:
 
@@ -115,6 +117,10 @@ Capture still writes raw audio locally and uploads the same chunks as before. Th
 
 For `room-1`, that worker path is intentionally delayed. Raw room chunks still upload every `30s`, but the worker batches contiguous room audio into `ROOM_ASSEMBLY_WINDOW_SECONDS` windows and can idle-flush a shorter tail after `ROOM_ASSEMBLY_IDLE_FLUSH_SECONDS`. Searchable room output appears only after an `AssemblyAI` room batch returns at least one real name from the roster file. If `AssemblyAI` only echoes diarization labels like `A/B/C`, the batch stays hidden and those labels are never surfaced as real speaker names.
 
+That delayed room path now has its own cost-control gate too. After the `600s` room window is stitched, but before `AssemblyAI` is called, the worker measures approximate speech duration across the whole window. If the result is below `ROOM_MIN_SPEECH_SECONDS`, the worker skips that room window, marks those chunks done, and does not retry it.
+
+There is also a separate run-once second-pass room enrichment command. It reads only recent canonical `room-1` utterances, keeps raw canonical `text`, `speaker_name`, and timestamps unchanged, and writes inferred speaker cleanup into a separate enrichment table. The intended first live pass is the most recent `4h`.
+
 This doc assumes the shared database and bucket already exist.
 
 ## 2. Optional: Capture Audio On This Machine
@@ -165,6 +171,8 @@ launchctl kickstart -k "gui/$(id -u)/com.ambient-memory.dual-capture"
 
 If this machine only runs the room mic, keep using the direct `start-room-mic` command and skip the dual-capture launchd service.
 
+This still runs as an always-on launchd service, but the capture plist uses launchd `ProcessType` `Interactive`. That is intentional: with AVFoundation mic capture on this stack, `Background` launchd jobs can produce severely truncated audio chunks, while `Interactive` keeps chunk lengths healthy.
+
 ## Stop Capture On This Machine
 
 If you started room capture or dual capture manually in a terminal, stop it with `Ctrl-C` in that terminal.
@@ -198,9 +206,19 @@ What it does:
 - dedups across sources
 - writes canonical utterances to Postgres
 
-## 4. Run The API
-
 Operator expectation: `room-1` raw uploads stay immediate, but first searchable room output can lag by about `10` minutes during continuous speech because publication waits for a named `AssemblyAI` batch.
+Operator expectation for quiet periods: low-speech `room-1` windows can be skipped before `AssemblyAI`, so no searchable room output appears and that skip does not retry.
+
+If you want the delayed second-pass cleanup over recent room transcript data, run:
+
+```bash
+cd "$HOME/Projects/ambient-memory-log"
+uv run ambient-memory enrich-room --hours 4 --source-id room-1 --resolver-version openai-room-v1
+```
+
+Use `--dry-run` first if you only want the recent `4 hours` scope summary. Rerunning the same `--resolver-version` is idempotent for already-enriched canonical utterances.
+
+## 4. Run The API
 
 Manual start:
 

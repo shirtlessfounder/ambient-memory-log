@@ -18,6 +18,8 @@ For `room-1`, raw capture and upload still happen every `30s`. Publication is de
 
 There are now two separate dead-air controls. First, capture can skip obviously silent `30s` chunks locally with the upload-time silence filter. Second, before `room-1` hits `AssemblyAI`, the worker measures speech-like activity on the stitched room window. If speech is below `ROOM_MIN_SPEECH_SECONDS` (default `20`), that room window is skipped permanently, never sent to `AssemblyAI`, and does not retry.
 
+`room-1` also has a bounded second-pass enrichment path. It reads recent canonical room utterances, keeps raw canonical `text`, `speaker_name`, and timing unchanged, and writes inferred speaker cleanup into a separate `aa_canonical_utterance_enrichments` layer. The run-once operator command uses `OPENAI_API_KEY`, scopes to recent utterances only, and keeps the same utterance row shape.
+
 ## Commands
 
 - `uv run ambient-memory list-devices`
@@ -31,6 +33,7 @@ There are now two separate dead-air controls. First, capture can skip obviously 
   Re-running the same source id now prompts before append; use `--allow-existing-source-id` only for deliberate reruns.
 - `uv run ambient-memory worker run-once --dry-run`
 - `uv run ambient-memory worker run --poll-seconds 5`
+- `uv run ambient-memory enrich-room --hours 4 --source-id room-1 --resolver-version openai-room-v1`
 - `uv run ambient-memory api --host 127.0.0.1 --port 8000`
 - `uv run ambient-memory enroll voiceprint --label "Dylan" --audio ./sample.wav`
 - `uv run ambient-memory enroll voiceprint-live --label "Dylan"`

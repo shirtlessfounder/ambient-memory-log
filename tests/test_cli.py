@@ -19,6 +19,7 @@ def test_cli_lists_expected_commands() -> None:
     assert "worker" in help_text
     assert "api" in help_text
     assert "enroll" in help_text
+    assert "enrich-room" in help_text
     assert "import-recording" in help_text
     assert "list-devices" in help_text
     assert "start-teammate" in help_text
@@ -368,6 +369,96 @@ def test_cli_worker_run_once_wires_dry_run_flag(monkeypatch) -> None:
     assert result.exit_code == 0
     assert calls == {"dry_run": True}
     assert "pending" in result.output.lower()
+
+
+def test_cli_enrich_room_defaults_to_recent_four_hours(monkeypatch) -> None:
+    from ambient_memory import cli
+
+    assert hasattr(cli, "run_room_enrichment")
+
+    calls: dict[str, object] = {}
+
+    class Result:
+        dry_run = False
+        source_id = "room-1"
+        hours = 4
+        windows = 2
+        utterances = 12
+        created = 12
+
+    def fake_run_room_enrichment(
+        *,
+        hours: int,
+        source_id: str,
+        resolver_version: str,
+        dry_run: bool,
+    ):
+        calls.update(
+            {
+                "hours": hours,
+                "source_id": source_id,
+                "resolver_version": resolver_version,
+                "dry_run": dry_run,
+            }
+        )
+        return Result()
+
+    monkeypatch.setattr(cli, "run_room_enrichment", fake_run_room_enrichment)
+
+    result = runner.invoke(app, ["enrich-room"])
+
+    assert result.exit_code == 0
+    assert calls == {
+        "hours": 4,
+        "source_id": "room-1",
+        "resolver_version": "openai-room-v1",
+        "dry_run": False,
+    }
+    assert "Created 12 enrichment row(s) for 12 utterance(s) across 2 window(s)" in result.output
+
+
+def test_cli_enrich_room_dry_run_reports_scope_without_writing(monkeypatch) -> None:
+    from ambient_memory import cli
+
+    assert hasattr(cli, "run_room_enrichment")
+
+    class Result:
+        dry_run = True
+        source_id = "room-1"
+        hours = 6
+        windows = 3
+        utterances = 19
+        created = 0
+
+    def fake_run_room_enrichment(
+        *,
+        hours: int,
+        source_id: str,
+        resolver_version: str,
+        dry_run: bool,
+    ):
+        assert hours == 6
+        assert source_id == "room-1"
+        assert resolver_version == "resolver-2026-04-10"
+        assert dry_run is True
+        return Result()
+
+    monkeypatch.setattr(cli, "run_room_enrichment", fake_run_room_enrichment)
+
+    result = runner.invoke(
+        app,
+        [
+            "enrich-room",
+            "--hours",
+            "6",
+            "--resolver-version",
+            "resolver-2026-04-10",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Dry run: 19 utterance(s) across 3 window(s) would be processed for room-1 over the last 6h" in result.output
 
 
 def test_cli_worker_run_wires_poll_seconds(monkeypatch) -> None:

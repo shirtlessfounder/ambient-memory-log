@@ -87,6 +87,12 @@ class WorkerSettings(DatabaseSettings):
     model_config = COMMON_MODEL_CONFIG
 
 
+class RoomEnrichmentSettings(DatabaseSettings):
+    openai_api_key: str = Field(alias="OPENAI_API_KEY")
+
+    model_config = COMMON_MODEL_CONFIG
+
+
 class ApiSettings(DatabaseSettings):
     aws_region: str | None = Field(default=None, alias="AWS_REGION")
     api_host: str = Field(default="127.0.0.1", alias="API_HOST")

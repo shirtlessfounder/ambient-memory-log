@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -98,6 +98,32 @@ class CanonicalUtterance(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     provenance: Mapped[list["UtteranceSource"]] = relationship(back_populates="canonical_utterance")
+    enrichments: Mapped[list["CanonicalUtteranceEnrichment"]] = relationship(back_populates="canonical_utterance")
+
+
+class CanonicalUtteranceEnrichment(Base):
+    __tablename__ = "aa_canonical_utterance_enrichments"
+    __table_args__ = (
+        UniqueConstraint(
+            "canonical_utterance_id",
+            "resolver_vendor",
+            "resolver_version",
+            name="uq_canonical_utterance_enrichments_resolver_version",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    canonical_utterance_id: Mapped[str] = mapped_column(ForeignKey("aa_canonical_utterances.id"), nullable=False)
+    resolver_vendor: Mapped[str] = mapped_column(String(50), nullable=False)
+    resolver_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    resolved_speaker_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    resolved_speaker_confidence: Mapped[float | None] = mapped_column(Float)
+    cleaned_text: Mapped[str] = mapped_column(Text, nullable=False)
+    cleaned_text_confidence: Mapped[float | None] = mapped_column(Float)
+    resolution_notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    canonical_utterance: Mapped["CanonicalUtterance"] = relationship(back_populates="enrichments")
 
 
 class UtteranceSource(Base):
