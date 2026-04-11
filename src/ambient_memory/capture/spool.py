@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
+import os
 from pathlib import Path
 
 
@@ -24,11 +25,14 @@ class LocalSpool:
         *,
         settle_seconds: int = 2,
         max_backlog_files: int = 2048,
+        require_stable_root: bool = False,
     ) -> None:
         self.root = Path(root)
         self.retry_dir = self.root / "retry"
         self.settle_seconds = settle_seconds
         self.max_backlog_files = max_backlog_files
+        self.require_stable_root = require_stable_root
+        self._root_observations: dict[Path, tuple[int, int]] = {}
 
     def ensure(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -38,7 +42,9 @@ class LocalSpool:
         self.ensure()
         current = (now or datetime.now(UTC)).timestamp()
         entries: list[SpoolEntry] = []
-        candidates = self._audio_candidates()
+        all_candidates = self._audio_candidates()
+        root_candidates = {candidate for candidate in all_candidates if candidate.parent == self.root}
+        candidates = all_candidates
         if self._retry_file_count() >= self.max_backlog_files:
             candidates = [candidate for candidate in candidates if candidate.parent == self.retry_dir]
 
@@ -48,8 +54,11 @@ class LocalSpool:
                 continue
             if current - stat_result.st_mtime < self.settle_seconds:
                 continue
+            if self._requires_additional_stable_poll(candidate, stat_result=stat_result):
+                continue
             entries.append(self._load_entry(candidate))
 
+        self._prune_root_observations(root_candidates)
         return entries
 
     def backlog_file_count(self) -> int:
@@ -71,6 +80,7 @@ class LocalSpool:
                 )
             target_path = self.retry_dir / source_path.name
             source_path.replace(target_path)
+            self._root_observations.pop(source_path, None)
 
         failed_entry = SpoolEntry(
             path=target_path,
@@ -90,6 +100,7 @@ class LocalSpool:
         return failed_entry
 
     def mark_uploaded(self, entry: SpoolEntry) -> None:
+        self._root_observations.pop(entry.path, None)
         if entry.path.exists():
             entry.path.unlink()
 
@@ -102,6 +113,20 @@ class LocalSpool:
 
     def _retry_file_count(self) -> int:
         return len(list(self.retry_dir.glob("*.wav")))
+
+    def _requires_additional_stable_poll(self, path: Path, *, stat_result: os.stat_result) -> bool:
+        if not self.require_stable_root or path.parent != self.root:
+            return False
+
+        observation = (stat_result.st_size, stat_result.st_mtime_ns)
+        previous = self._root_observations.get(path)
+        self._root_observations[path] = observation
+        return previous != observation
+
+    def _prune_root_observations(self, candidates: set[Path]) -> None:
+        stale_paths = [path for path in self._root_observations if path not in candidates]
+        for path in stale_paths:
+            self._root_observations.pop(path, None)
 
     def _load_entry(self, path: Path) -> SpoolEntry:
         metadata_path = self._metadata_path(path)

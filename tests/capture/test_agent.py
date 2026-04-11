@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 import logging
 from pathlib import Path
 import signal
@@ -355,3 +356,76 @@ def test_capture_agent_stops_capture_when_sigterm_is_received(monkeypatch) -> No
     assert events[-1] == "stop"
     assert registered_handlers[signal.SIGINT] is previous_handler
     assert registered_handlers[signal.SIGTERM] is previous_handler
+
+
+def test_capture_agent_re_resolves_named_device_before_starting_ffmpeg(monkeypatch) -> None:
+    spool = StubSpool(full=False, count=0, max_backlog_files=4)
+    agent = CaptureAgent(
+        config=AgentRuntimeConfig(
+            source_id="desk-a",
+            source_type="macbook",
+            device_owner="dylan",
+            spool_dir=Path("/tmp/spool"),
+            capture_device_name="MacBook Pro Microphone",
+            active_start_local="09:00",
+            active_end_local="00:00",
+            max_backlog_files=spool.max_backlog_files,
+        ),
+        device=AudioDevice(index="1", name="MacBook Pro Microphone"),
+        uploader=QuietUploader(spool),
+        device_resolver=lambda: AudioDevice(index="2", name="MacBook Pro Microphone"),
+    )
+
+    commands: list[list[str]] = []
+
+    class FakePopen:
+        def __init__(self, command, **kwargs) -> None:
+            commands.append(command)
+
+        def poll(self) -> None:
+            return None
+
+    monkeypatch.setattr(agent_module.subprocess, "Popen", FakePopen)
+
+    agent._ensure_capture_running()
+
+    assert commands
+    assert commands[0][commands[0].index("-i") + 1] == ":2"
+    assert agent.device == AudioDevice(index="2", name="MacBook Pro Microphone")
+
+
+def test_capture_agent_restarts_ffmpeg_when_live_capture_stalls(monkeypatch, caplog) -> None:
+    spool = StubSpool(full=False, count=0, max_backlog_files=4)
+    agent = _build_agent(QuietUploader(spool))
+    agent._process = SimpleNamespace(poll=lambda: None)
+    agent._last_capture_progress_at = datetime.now(UTC) - timedelta(seconds=120)
+    agent._last_capture_observation = ("chunk-room.wav", 524288, 123456789)
+
+    monkeypatch.setattr(
+        agent,
+        "_capture_progress_observation",
+        lambda: ("chunk-room.wav", 524288, 123456789),
+        raising=False,
+    )
+
+    events: list[str] = []
+
+    def fake_stop_capture() -> None:
+        events.append("stop")
+        agent._process = None
+
+    class FakePopen:
+        def __init__(self, command, **kwargs) -> None:
+            events.append("start")
+
+        def poll(self) -> None:
+            return None
+
+    monkeypatch.setattr(agent, "_stop_capture", fake_stop_capture)
+    monkeypatch.setattr(agent_module.subprocess, "Popen", FakePopen)
+    caplog.set_level(logging.WARNING)
+
+    agent._ensure_capture_running()
+
+    assert events == ["stop", "start"]
+    assert "produced no local spool progress" in caplog.text

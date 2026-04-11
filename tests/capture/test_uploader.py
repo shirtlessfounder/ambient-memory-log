@@ -482,6 +482,46 @@ def test_chunk_uploader_moves_failed_uploads_into_retry_backlog(
     assert retry_entries[0].attempts == 1
 
 
+def test_chunk_uploader_waits_for_stable_live_root_chunk_before_uploading(
+    tmp_path: Path,
+    session_factory: sessionmaker[Session],
+) -> None:
+    uploader_module = load_uploader_module()
+    spool_module = load_spool_module()
+    client = RecordingS3Client()
+    spool = spool_module.LocalSpool(tmp_path / "spool", settle_seconds=0, require_stable_root=True)
+    write_chunk(spool.root / "chunk-session-20260402T090000.wav")
+
+    uploader = uploader_module.ChunkUploader(
+        spool=spool,
+        s3_client=client,
+        session_factory=session_factory,
+        bucket="ambient-memory",
+        source_id="desk-a",
+        source_type="macbook",
+        device_owner="Dylan",
+        local_timezone=ZoneInfo("America/New_York"),
+    )
+
+    first_result = uploader.upload_ready(now=datetime(2026, 11, 1, 7, 0, 0, tzinfo=UTC))
+    second_result = uploader.upload_ready(now=datetime(2026, 11, 1, 7, 0, 0, tzinfo=UTC))
+
+    session = session_factory()
+    try:
+        stored_chunk = session.scalar(select(AudioChunk))
+    finally:
+        session.close()
+
+    assert first_result.attempted == 0
+    assert first_result.uploaded == 0
+    assert first_result.failed == 0
+    assert second_result.attempted == 1
+    assert second_result.uploaded == 1
+    assert second_result.failed == 0
+    assert stored_chunk is not None
+    assert client.put_calls[0]["Key"] == "raw-audio/desk-a/2026/04/02/20260402T130000.000000Z-session.wav"
+
+
 def test_chunk_uploader_skips_chunks_younger_than_segment_length(
     tmp_path: Path,
     session_factory: sessionmaker[Session],

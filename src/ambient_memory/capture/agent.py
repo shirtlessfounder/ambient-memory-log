@@ -7,6 +7,7 @@ from pathlib import Path
 import signal
 import subprocess
 from time import sleep
+from typing import Callable
 from uuid import uuid4
 
 from ambient_memory.capture.device_discovery import AudioDevice, select_audio_device, parse_avfoundation_list
@@ -19,6 +20,7 @@ from ambient_memory.logging import configure_logging
 
 
 LOGGER = logging.getLogger(__name__)
+CAPTURE_STALL_TIMEOUT_SECONDS = (DEFAULT_SEGMENT_SECONDS * 2) + 5
 
 
 class CaptureAgentShutdown(Exception):
@@ -52,6 +54,7 @@ class CaptureAgent:
         config: AgentRuntimeConfig,
         device: AudioDevice,
         uploader: ChunkUploader,
+        device_resolver: Callable[[], AudioDevice] | None = None,
         ffmpeg_binary: str = "ffmpeg",
         poll_seconds: int = 2,
         heartbeat_seconds: int = 30,
@@ -59,6 +62,7 @@ class CaptureAgent:
         self.config = config
         self.device = device
         self.uploader = uploader
+        self.device_resolver = device_resolver
         self.ffmpeg_binary = ffmpeg_binary
         self.poll_seconds = poll_seconds
         self.heartbeat_seconds = heartbeat_seconds
@@ -66,6 +70,8 @@ class CaptureAgent:
         self._process: subprocess.Popen[bytes] | None = None
         self._last_heartbeat_at: datetime | None = None
         self._capture_paused_for_backlog = False
+        self._last_capture_observation: tuple[str, int, int] | None = None
+        self._last_capture_progress_at: datetime | None = None
 
     def run(self) -> None:
         active_start = parse_local_time(self.config.active_start_local)
@@ -104,15 +110,25 @@ class CaptureAgent:
             self._stop_capture()
 
     def _ensure_capture_running(self) -> None:
+        now = datetime.now(UTC)
         if self._process is not None and self._process.poll() is None:
-            return
+            if not self._capture_has_stalled(now):
+                return
+
+            LOGGER.warning(
+                "ffmpeg produced no local spool progress for %ss; restarting source_id=%s",
+                CAPTURE_STALL_TIMEOUT_SECONDS,
+                self.config.source_id,
+            )
+            self._stop_capture()
 
         if self._process is not None and self._process.poll() is not None:
             LOGGER.warning("ffmpeg exited with return code %s; restarting", self._process.returncode)
 
+        device = self._resolve_device()
         self._process = subprocess.Popen(
             build_capture_command(
-                device=self.device,
+                device=device,
                 spool_dir=self.config.spool_dir,
                 ffmpeg_binary=self.ffmpeg_binary,
                 segment_seconds=DEFAULT_SEGMENT_SECONDS,
@@ -122,9 +138,30 @@ class CaptureAgent:
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+        self._last_capture_observation = self._capture_progress_observation()
+        self._last_capture_progress_at = now
+
+    def _resolve_device(self) -> AudioDevice:
+        if self.device_resolver is None:
+            return self.device
+
+        device = self.device_resolver()
+        if device != self.device:
+            LOGGER.info(
+                "capture device changed source_id=%s from=%s:%s to=%s:%s",
+                self.config.source_id,
+                self.device.index,
+                self.device.name,
+                device.index,
+                device.name,
+            )
+        self.device = device
+        return device
 
     def _stop_capture(self) -> None:
         if self._process is None:
+            self._last_capture_observation = None
+            self._last_capture_progress_at = None
             return
 
         if self._process.poll() is None:
@@ -136,6 +173,8 @@ class CaptureAgent:
                 self._process.wait(timeout=10)
 
         self._process = None
+        self._last_capture_observation = None
+        self._last_capture_progress_at = None
 
     def _sync_capture_state(self, *, active_window: bool) -> None:
         if not active_window:
@@ -165,6 +204,40 @@ class CaptureAgent:
             )
             self._capture_paused_for_backlog = True
         self._stop_capture()
+
+    def _capture_has_stalled(self, now: datetime) -> bool:
+        observation = self._capture_progress_observation()
+        if observation != self._last_capture_observation:
+            self._last_capture_observation = observation
+            self._last_capture_progress_at = now
+            return False
+
+        if self._last_capture_progress_at is None:
+            self._last_capture_progress_at = now
+            return False
+
+        stalled_for_seconds = (now - self._last_capture_progress_at).total_seconds()
+        return stalled_for_seconds >= CAPTURE_STALL_TIMEOUT_SECONDS
+
+    def _capture_progress_observation(self) -> tuple[str, int, int] | None:
+        latest_path: Path | None = None
+        latest_mtime_ns = -1
+        latest_size = 0
+        for candidate in self.config.spool_dir.glob("*.wav"):
+            try:
+                stat_result = candidate.stat()
+            except FileNotFoundError:
+                continue
+            if stat_result.st_mtime_ns <= latest_mtime_ns:
+                continue
+            latest_path = candidate
+            latest_mtime_ns = stat_result.st_mtime_ns
+            latest_size = stat_result.st_size
+
+        if latest_path is None:
+            return None
+
+        return (latest_path.name, latest_size, latest_mtime_ns)
 
     def _upload_ready(self) -> UploadBatchResult:
         try:
@@ -244,10 +317,19 @@ def run_capture_agent(
 ) -> None:
     configure_logging()
     config = load_runtime_config(dry_run=dry_run, env_file=env_file)
-    spool = LocalSpool(config.spool_dir, max_backlog_files=config.max_backlog_files)
+    spool = LocalSpool(
+        config.spool_dir,
+        max_backlog_files=config.max_backlog_files,
+        require_stable_root=True,
+    )
     spool.ensure()
-    devices = list_local_audio_devices(ffmpeg_binary)
-    device = choose_audio_device(devices, device_selection or config.capture_device_name)
+    selection = device_selection or config.capture_device_name
+
+    def resolve_device() -> AudioDevice:
+        devices = list_local_audio_devices(ffmpeg_binary)
+        return choose_audio_device(devices, selection)
+
+    device = resolve_device()
 
     if dry_run:
         LOGGER.info("dry-run device=%s", device.name)
@@ -290,6 +372,7 @@ def run_capture_agent(
         config=config,
         device=device,
         uploader=uploader,
+        device_resolver=resolve_device,
         ffmpeg_binary=ffmpeg_binary,
     )
     agent.run()

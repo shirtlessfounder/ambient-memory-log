@@ -49,6 +49,28 @@ def test_local_spool_skips_recent_capture_chunks(tmp_path: Path) -> None:
     assert entries == []
 
 
+def test_local_spool_requires_stable_second_poll_for_live_root_chunks(tmp_path: Path) -> None:
+    spool_module = load_spool_module()
+    spool = spool_module.LocalSpool(tmp_path, settle_seconds=0, require_stable_root=True)
+    chunk_path = write_chunk(tmp_path / "chunk-session-20260402T090000.wav", age_seconds=10)
+
+    assert spool.iter_ready() == []
+
+    entries = spool.iter_ready()
+
+    assert [entry.path for entry in entries] == [chunk_path]
+
+
+def test_local_spool_allows_retry_chunks_without_stable_second_poll(tmp_path: Path) -> None:
+    spool_module = load_spool_module()
+    spool = spool_module.LocalSpool(tmp_path, settle_seconds=0, require_stable_root=True)
+    retry_chunk = write_chunk(tmp_path / "retry" / "chunk-session-20260402T090000.wav", age_seconds=10)
+
+    entries = spool.iter_ready()
+
+    assert [entry.path for entry in entries] == [retry_chunk]
+
+
 def test_local_spool_skips_empty_placeholder_chunks(tmp_path: Path) -> None:
     spool_module = load_spool_module()
     spool = spool_module.LocalSpool(tmp_path, settle_seconds=0)
