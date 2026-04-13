@@ -11,7 +11,7 @@ from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session, sessionmaker
 
-from ambient_memory.integrations.pyannote_client import VoiceprintReference
+from ambient_memory.integrations.pyannote_client import PyannoteError, VoiceprintReference
 from ambient_memory.models import Base, CanonicalUtterance, Source
 
 
@@ -605,6 +605,161 @@ def test_room_enrichment_rerun_is_idempotent_for_same_resolver_version(
         "resolve_track_identities": 1,
         "align_retranscribed_segments": 1,
     }
+
+
+def test_room_enrichment_falls_back_to_raw_track_labels_when_pyannote_identity_fails(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    room_enrichment = _import_room_enrichment_module()
+    enrichment_model = _canonical_enrichment_model()
+
+    window_start = datetime(2026, 4, 10, 14, 0, tzinfo=UTC)
+    _seed_canonical_utterances(
+        session_factory,
+        utterances=[
+            {
+                "id": "utt-1",
+                "text": "we should ship it after lunch",
+                "speaker_name": "A",
+                "started_at": window_start + timedelta(minutes=2),
+                "ended_at": window_start + timedelta(minutes=2, seconds=5),
+            },
+            {
+                "id": "utt-2",
+                "text": "i can take the follow up",
+                "speaker_name": "B",
+                "started_at": window_start + timedelta(minutes=4),
+                "ended_at": window_start + timedelta(minutes=4, seconds=5),
+            },
+        ],
+    )
+
+    provenance_slices = (
+        FakeProvenanceSlice(canonical_utterance_id="utt-1", raw_track_label="A"),
+        FakeProvenanceSlice(canonical_utterance_id="utt-2", raw_track_label="B"),
+    )
+    window_audio = FakeRoomWindowAudio(
+        audio_bytes=b"window-audio",
+        track_bundles=(
+            FakeTrackBundle(raw_track_label="A", audio_bytes=b"track-a", speech_seconds=13.2),
+            FakeTrackBundle(raw_track_label="B", audio_bytes=b"track-b", speech_seconds=11.4),
+        ),
+    )
+    aligned_rows = (
+        FakeAlignedTranscriptRow(
+            canonical_utterance_id="utt-1",
+            text="We should ship it after lunch.",
+            confidence=0.91,
+            used_raw_fallback=False,
+        ),
+        FakeAlignedTranscriptRow(
+            canonical_utterance_id="utt-2",
+            text="I can take the follow-up.",
+            confidence=0.83,
+            used_raw_fallback=False,
+        ),
+    )
+    segments = ("segment-1", "segment-2")
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        room_enrichment,
+        "load_room_provenance_slices",
+        lambda *args, **kwargs: provenance_slices,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        room_enrichment,
+        "build_room_window_audio",
+        lambda *args, **kwargs: window_audio,
+        raising=False,
+    )
+
+    def fake_resolve_track_identities(**kwargs):
+        calls["resolve_track_identities"] = kwargs
+        raise PyannoteError("pyannote request failed: 402 insufficient credits")
+
+    def fake_align_retranscribed_segments(utterances, segments_value, *, window_started_at):
+        calls["align_retranscribed_segments"] = {
+            "utterance_ids": [utterance.canonical_utterance_id for utterance in utterances],
+            "segments": tuple(segments_value),
+            "window_started_at": window_started_at,
+        }
+        return list(aligned_rows)
+
+    monkeypatch.setattr(
+        room_enrichment,
+        "resolve_track_identities",
+        fake_resolve_track_identities,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        room_enrichment,
+        "align_retranscribed_segments",
+        fake_align_retranscribed_segments,
+        raising=False,
+    )
+
+    retranscription_client = FakeRetranscriptionClient(segments=segments)
+
+    result = room_enrichment.run_room_enrichment(
+        session_factory=session_factory,
+        source_id="room-1",
+        hours=4,
+        resolver_version="room-v2-audio-identity-v1",
+        dry_run=False,
+        settings=_room_v2_settings(),
+        now=lambda: datetime(2026, 4, 10, 16, 0, tzinfo=UTC),
+        s3_client=object(),
+        pyannote_client=object(),
+        retranscription_client=retranscription_client,
+        voiceprints=(VoiceprintReference(label="Dylan", voiceprint="vp-dylan"),),
+    )
+
+    session = session_factory()
+    try:
+        enrichment_rows = session.scalars(
+            select(enrichment_model).order_by(enrichment_model.canonical_utterance_id)
+        ).all()
+    finally:
+        session.close()
+
+    assert result.created == 2
+    assert calls["align_retranscribed_segments"] == {
+        "utterance_ids": ["utt-1", "utt-2"],
+        "segments": segments,
+        "window_started_at": window_start,
+    }
+    assert retranscription_client.calls == [
+        {
+            "audio_bytes": b"window-audio",
+            "filename": "room-1-20260410T140000Z.wav",
+            "window_started_at": window_start,
+            "content_type": "audio/wav",
+        }
+    ]
+
+    persisted = {
+        row.canonical_utterance_id: row
+        for row in enrichment_rows
+    }
+    assert persisted["utt-1"].resolved_speaker_name == "A"
+    assert persisted["utt-2"].resolved_speaker_name == "B"
+    assert persisted["utt-1"].resolved_speaker_confidence is None
+    assert persisted["utt-2"].resolved_speaker_confidence is None
+    assert persisted["utt-1"].identity_method == "raw-track-fallback"
+    assert persisted["utt-2"].identity_method == "raw-track-fallback"
+    assert persisted["utt-1"].identity_track_label == "A"
+    assert persisted["utt-2"].identity_track_label == "B"
+    assert persisted["utt-1"].identity_match_label is None
+    assert persisted["utt-2"].identity_match_label is None
+    assert persisted["utt-1"].cleaned_text == "We should ship it after lunch."
+    assert persisted["utt-2"].cleaned_text == "I can take the follow-up."
+    assert persisted["utt-1"].transcript_method == "openai-retranscribe"
+    assert persisted["utt-2"].transcript_method == "openai-retranscribe"
+    assert persisted["utt-1"].resolution_notes == "speaker identity fell back to raw track label after pyannote failure"
+    assert persisted["utt-2"].resolution_notes == "speaker identity fell back to raw track label after pyannote failure"
 
 
 def test_room_enrichment_dry_run_scopes_to_recent_hours_and_fixed_windows(

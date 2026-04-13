@@ -44,7 +44,7 @@ class OpenAIRoomRetranscriptionClient:
         transport: Transport | None = None,
         model: str = DEFAULT_OPENAI_AUDIO_TRANSCRIPTION_MODEL,
         base_url: str = "https://api.openai.com/v1",
-        timeout: float = 60.0,
+        timeout: float = 900.0,
     ) -> None:
         self.api_key = api_key
         self.model = model
@@ -124,6 +124,10 @@ def _read_json_response(transport: Transport, http_request: Request) -> dict[str
         raise OpenAIRoomRetranscriptionClientError(
             f"OpenAI audio transcription request failed with status {exc.code}: {detail}"
         ) from exc
+    except TimeoutError as exc:
+        raise OpenAIRoomRetranscriptionClientError(
+            f"OpenAI audio transcription request timed out: {exc}"
+        ) from exc
     except URLError as exc:
         raise OpenAIRoomRetranscriptionClientError(
             f"OpenAI audio transcription request failed: {exc.reason}"
@@ -161,11 +165,15 @@ def _parse_segments(payload: Mapping[str, Any]) -> list[RoomRetranscribedSegment
         if end_seconds < start_seconds:
             raise OpenAIRoomRetranscriptionClientError("OpenAI audio transcription segment end_seconds must be >= start_seconds")
 
+        text = _optional_text(item.get("text"))
+        if text is None:
+            continue
+
         parsed.append(
             RoomRetranscribedSegment(
                 start_seconds=start_seconds,
                 end_seconds=end_seconds,
-                text=_required_text(item, "text", context="segment"),
+                text=text,
                 confidence=_optional_float(item.get("confidence"), field_name="confidence"),
             )
         )
@@ -233,6 +241,17 @@ def _required_text(payload: Mapping[str, Any], field_name: str, *, context: str)
         raise OpenAIRoomRetranscriptionClientError(
             f"OpenAI audio transcription {context} field {field_name} must not be empty"
         )
+    return normalized
+
+
+def _optional_text(value: Any) -> str | None:
+    if not isinstance(value, str):
+        raise OpenAIRoomRetranscriptionClientError(
+            "OpenAI audio transcription segment field text must be a string"
+        )
+    normalized = value.strip()
+    if not normalized:
+        return None
     return normalized
 
 

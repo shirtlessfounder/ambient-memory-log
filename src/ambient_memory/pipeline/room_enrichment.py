@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+import logging
 from typing import Callable, Protocol
 
 from sqlalchemy import and_, select
@@ -10,7 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from ambient_memory.config import RoomEnrichmentSettings, load_settings
 from ambient_memory.db import build_session_factory
-from ambient_memory.integrations.pyannote_client import VoiceprintReference
+from ambient_memory.integrations.pyannote_client import PyannoteError, VoiceprintReference
 from ambient_memory.models import CanonicalUtterance, CanonicalUtteranceEnrichment, Voiceprint
 from ambient_memory.pipeline.room_track_audio import build_room_window_audio, load_room_provenance_slices
 from ambient_memory.pipeline.room_track_identity import (
@@ -29,6 +30,7 @@ DEFAULT_ROOM_ENRICHMENT_ENV_FILE = ".env.worker"
 DEFAULT_ROOM_ENRICHMENT_RESOLVER_VENDOR = "room-v2"
 DEFAULT_ROOM_ENRICHMENT_RESOLVER_VERSION = "room-v2-audio-identity-v1"
 FIXED_WINDOW_MINUTES = 15
+LOGGER = logging.getLogger(__name__)
 
 
 class RoomEnrichmentError(RuntimeError):
@@ -291,15 +293,13 @@ def _persist_window_enrichments(
     )
 
     window_audio = build_room_window_audio(provenance_slices, s3_client=s3_client)
-    track_identities = tuple(
-        resolve_track_identities(
-            track_bundles=window_audio.track_bundles,
-            pyannote_client=pyannote_client,
-            voiceprints=voiceprints,
-            minimum_pooled_speech_seconds=minimum_pooled_speech_seconds,
-            teammate_threshold=teammate_threshold,
-            top_vs_second_margin=top_vs_second_margin,
-        )
+    track_identities, identity_resolution_notes = _resolve_window_track_identities(
+        track_bundles=window_audio.track_bundles,
+        pyannote_client=pyannote_client,
+        voiceprints=voiceprints,
+        minimum_pooled_speech_seconds=minimum_pooled_speech_seconds,
+        teammate_threshold=teammate_threshold,
+        top_vs_second_margin=top_vs_second_margin,
     )
     track_identity_by_label = _index_track_identities(
         track_identities,
@@ -330,9 +330,13 @@ def _persist_window_enrichments(
         strict=True,
     ):
         track_identity = track_identity_by_label[provenance_slice.raw_track_label]
-        transcript_method, resolution_notes = _transcript_audit(
+        transcript_method, transcript_resolution_notes = _transcript_audit(
             aligned_row=aligned_row,
             retranscription_vendor=retranscription_client.vendor,
+        )
+        resolution_notes = _merge_resolution_notes(
+            identity_resolution_notes.get(provenance_slice.raw_track_label),
+            transcript_resolution_notes,
         )
         session.add(
             CanonicalUtteranceEnrichment(
@@ -357,6 +361,59 @@ def _persist_window_enrichments(
         )
     session.flush()
     return len(window.utterances)
+
+
+def _resolve_window_track_identities(
+    *,
+    track_bundles: Sequence[object],
+    pyannote_client: object,
+    voiceprints: Sequence[VoiceprintReference],
+    minimum_pooled_speech_seconds: float,
+    teammate_threshold: float,
+    top_vs_second_margin: float,
+) -> tuple[tuple[object, ...], dict[str, str | None]]:
+    try:
+        return (
+            tuple(
+                resolve_track_identities(
+                    track_bundles=track_bundles,
+                    pyannote_client=pyannote_client,
+                    voiceprints=voiceprints,
+                    minimum_pooled_speech_seconds=minimum_pooled_speech_seconds,
+                    teammate_threshold=teammate_threshold,
+                    top_vs_second_margin=top_vs_second_margin,
+                )
+            ),
+            {},
+        )
+    except PyannoteError as exc:
+        raw_track_labels = tuple(str(_required_attr(bundle, "raw_track_label")) for bundle in track_bundles)
+        LOGGER.warning(
+            "room identity fell back to raw track labels after pyannote failure track_labels=%s error=%s",
+            list(raw_track_labels),
+            exc,
+        )
+        return (
+            tuple(_fallback_track_identity(raw_track_label) for raw_track_label in raw_track_labels),
+            {
+                raw_track_label: "speaker identity fell back to raw track label after pyannote failure"
+                for raw_track_label in raw_track_labels
+            },
+        )
+
+
+def _fallback_track_identity(raw_track_label: str) -> object:
+    from ambient_memory.pipeline.room_track_identity import ResolvedTrackIdentity
+
+    return ResolvedTrackIdentity(
+        raw_track_label=raw_track_label,
+        resolved_identity=raw_track_label,
+        identity_method="raw-track-fallback",
+        top_match_label=None,
+        top_match_confidence=None,
+        second_match_label=None,
+        second_match_confidence=None,
+    )
 
 
 def _order_rows_by_canonical_utterance_id(
@@ -436,6 +493,13 @@ def _transcript_audit(*, aligned_row: object, retranscription_vendor: str) -> tu
     if used_raw_fallback:
         return "raw-canonical-fallback", "transcript alignment fell back to raw canonical text"
     return f"{retranscription_vendor}-retranscribe", None
+
+
+def _merge_resolution_notes(*notes: str | None) -> str | None:
+    filtered = [note for note in notes if note]
+    if not filtered:
+        return None
+    return "; ".join(filtered)
 
 
 def _window_audio_filename(*, source_id: str, window_started_at: datetime) -> str:

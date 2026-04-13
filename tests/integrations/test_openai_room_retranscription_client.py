@@ -131,6 +131,53 @@ def test_openai_room_retranscription_client_raises_on_transport_failure() -> Non
         )
 
 
+def test_openai_room_retranscription_client_raises_on_timeout() -> None:
+    client_module = _import_client_module()
+
+    class TimeoutTransport:
+        def __call__(self, http_request: Request) -> FakeResponse:
+            raise TimeoutError("The read operation timed out")
+
+    client = client_module.OpenAIRoomRetranscriptionClient(
+        api_key="openai-secret",
+        transport=TimeoutTransport(),
+    )
+
+    with pytest.raises(client_module.OpenAIRoomRetranscriptionClientError, match="timed out"):
+        client.transcribe_window(
+            audio_bytes=b"audio-bytes",
+            filename="room-window.wav",
+            window_started_at=datetime(2026, 4, 10, 13, 0, tzinfo=UTC),
+        )
+
+
+def test_openai_room_retranscription_client_uses_configured_timeout_for_default_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client_module = _import_client_module()
+    seen: dict[str, object] = {}
+
+    def fake_urlopen(http_request: Request, *, timeout: float) -> FakeResponse:
+        seen["request"] = http_request
+        seen["timeout"] = timeout
+        return FakeResponse(b'{"segments": []}')
+
+    monkeypatch.setattr(client_module, "urlopen", fake_urlopen)
+    client = client_module.OpenAIRoomRetranscriptionClient(
+        api_key="openai-secret",
+        timeout=321.0,
+    )
+
+    segments = client.transcribe_window(
+        audio_bytes=b"audio-bytes",
+        filename="room-window.wav",
+        window_started_at=datetime(2026, 4, 10, 13, 0, tzinfo=UTC),
+    )
+
+    assert segments == []
+    assert seen["timeout"] == 321.0
+
+
 def test_openai_room_retranscription_client_raises_on_invalid_json_response() -> None:
     client_module = _import_client_module()
     client = client_module.OpenAIRoomRetranscriptionClient(
@@ -163,3 +210,35 @@ def test_openai_room_retranscription_client_raises_on_malformed_segment_payload(
             filename="room-window.wav",
             window_started_at=datetime(2026, 4, 10, 13, 0, tzinfo=UTC),
         )
+
+
+def test_openai_room_retranscription_client_skips_empty_text_segments() -> None:
+    client_module = _import_client_module()
+    client = client_module.OpenAIRoomRetranscriptionClient(
+        api_key="openai-secret",
+        transport=FakeTransport(
+            responses=[
+                (
+                    b'{"segments": ['
+                    b'{"start": 0.0, "end": 0.5, "text": "   ", "confidence": 0.9},'
+                    b'{"start": 0.5, "end": 1.5, "text": "Ship it after lunch.", "confidence": 0.81}'
+                    b"]}"
+                )
+            ]
+        ),
+    )
+
+    segments = client.transcribe_window(
+        audio_bytes=b"audio-bytes",
+        filename="room-window.wav",
+        window_started_at=datetime(2026, 4, 10, 13, 0, tzinfo=UTC),
+    )
+
+    assert segments == [
+        client_module.RoomRetranscribedSegment(
+            start_seconds=0.5,
+            end_seconds=1.5,
+            text="Ship it after lunch.",
+            confidence=0.81,
+        )
+    ]
