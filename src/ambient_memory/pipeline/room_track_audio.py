@@ -73,7 +73,6 @@ def load_room_provenance_slices(
         .where(CanonicalUtterance.started_at < normalized_window_ended_at)
         .where(TranscriptCandidate.source_id == source_id)
         .where(AudioChunk.source_id == source_id)
-        .where(TranscriptCandidate.speaker_hint.in_(ROOM_TRACK_LABELS))
         .order_by(
             CanonicalUtterance.started_at,
             CanonicalUtterance.ended_at,
@@ -89,12 +88,15 @@ def load_room_provenance_slices(
     for canonical_utterance, utterance_source, transcript_candidate, audio_chunk in session.execute(stmt):
         if canonical_utterance.id in selected_by_utterance_id:
             continue
+        raw_track_label = _candidate_track_label(transcript_candidate)
+        if raw_track_label is None:
+            continue
 
         selected_by_utterance_id[canonical_utterance.id] = RoomProvenanceSlice(
             canonical_utterance_id=canonical_utterance.id,
             transcript_candidate_id=transcript_candidate.id,
             source_id=transcript_candidate.source_id,
-            raw_track_label=str(transcript_candidate.speaker_hint),
+            raw_track_label=raw_track_label,
             utterance_started_at=_normalize_timestamp(canonical_utterance.started_at),
             utterance_ended_at=_normalize_timestamp(canonical_utterance.ended_at),
             audio_chunk_id=audio_chunk.id,
@@ -115,6 +117,20 @@ def load_room_provenance_slices(
             ),
         )
     )
+
+
+def _candidate_track_label(transcript_candidate: TranscriptCandidate) -> str | None:
+    speaker_hint = _optional_string(transcript_candidate.speaker_hint)
+    if speaker_hint is not None and speaker_hint in ROOM_TRACK_LABELS:
+        return speaker_hint
+
+    raw_payload = transcript_candidate.raw_payload
+    if isinstance(raw_payload, dict):
+        fallback_speaker = _optional_string(raw_payload.get("speaker"))
+        if fallback_speaker is not None:
+            return fallback_speaker
+
+    return None
 
 
 def build_room_window_audio(
@@ -174,6 +190,13 @@ def _slice_sort_key(provenance_slice: RoomProvenanceSlice) -> tuple[datetime, da
         provenance_slice.utterance_ended_at,
         provenance_slice.canonical_utterance_id,
     )
+
+
+def _optional_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
 
 
 def _load_chunk_audio(

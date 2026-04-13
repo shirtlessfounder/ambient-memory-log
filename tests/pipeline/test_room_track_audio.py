@@ -275,6 +275,75 @@ def test_load_room_provenance_slices_only_keeps_room_1_rows_and_prefers_canonica
     assert all(item.source_id == "room-1" for item in slices)
 
 
+def test_load_room_provenance_slices_falls_back_to_raw_payload_speaker_when_speaker_hint_missing(
+    session_factory: sessionmaker[Session],
+) -> None:
+    room_track_audio = _import_room_track_audio_module()
+    session = session_factory()
+    try:
+        session.add_all(
+            [
+                Source(id="room-1", source_type="room", device_owner=None),
+                AudioChunk(
+                    id="chunk-room-1",
+                    source_id="room-1",
+                    s3_bucket="ambient-memory",
+                    s3_key="raw-audio/room-1/chunk.wav",
+                    status="uploaded",
+                    started_at=_at(0.0),
+                    ended_at=_at(30.0),
+                ),
+                CanonicalUtterance(
+                    id="utt-room-null-hint",
+                    text="room provenance with null hint",
+                    started_at=_at(1.0),
+                    ended_at=_at(2.0),
+                    speaker_name=None,
+                    canonical_source_id="room-1",
+                    processing_version="v1",
+                ),
+            ]
+        )
+        session.flush()
+        session.add(
+            TranscriptCandidate(
+                id="cand-room-null-hint",
+                audio_chunk_id="chunk-room-1",
+                source_id="room-1",
+                vendor="assemblyai",
+                vendor_segment_id="seg-room-null-hint",
+                text="room provenance with null hint",
+                speaker_hint=None,
+                speaker_confidence=None,
+                confidence=0.88,
+                started_at=_at(1.0),
+                ended_at=_at(2.0),
+                raw_payload={"speaker": "Alexander"},
+            )
+        )
+        session.flush()
+        session.add(
+            UtteranceSource(
+                canonical_utterance_id="utt-room-null-hint",
+                transcript_candidate_id="cand-room-null-hint",
+                is_canonical=True,
+            )
+        )
+        session.commit()
+
+        slices = room_track_audio.load_room_provenance_slices(
+            session,
+            source_id="room-1",
+            window_started_at=_at(0.0),
+            window_ended_at=_at(900.0),
+        )
+    finally:
+        session.close()
+
+    assert [item.canonical_utterance_id for item in slices] == ["utt-room-null-hint"]
+    assert [item.raw_track_label for item in slices] == ["Alexander"]
+
+
 def test_build_room_window_audio_slices_wav_by_utterance_time_and_stitches_full_window_and_track_bundles() -> None:
     room_track_audio = _import_room_track_audio_module()
     chunk_one_key = "raw-audio/room-1/chunk-1.wav"
