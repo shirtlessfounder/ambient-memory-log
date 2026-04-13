@@ -60,6 +60,22 @@ def resolve_track_identities(
     for bundle in track_bundles:
         raw_track_label = _bundle_raw_track_label(bundle)
         speech_seconds = _bundle_speech_seconds(bundle)
+        if speech_seconds < minimum_pooled_speech_seconds:
+            resolved.append(
+                _resolved_identity(
+                    raw_track_label=raw_track_label,
+                    resolved_identity="unknown",
+                    identity_method="speech-too-short",
+                    audit=_MatchAudit(
+                        top_match_label=None,
+                        top_match_confidence=None,
+                        second_match_label=None,
+                        second_match_confidence=None,
+                    ),
+                )
+            )
+            continue
+
         matches = _identify_track_bundle(
             pyannote_client=pyannote_client,
             bundle=bundle,
@@ -67,10 +83,6 @@ def resolve_track_identities(
             voiceprints=voiceprint_list,
         )
         audit = _build_match_audit(matches, teammate_labels=teammate_labels)
-
-        if speech_seconds < minimum_pooled_speech_seconds:
-            resolved.append(_resolved_identity(raw_track_label=raw_track_label, resolved_identity="unknown", identity_method="speech-too-short", audit=audit))
-            continue
 
         if _is_confident_teammate_match(
             audit=audit,

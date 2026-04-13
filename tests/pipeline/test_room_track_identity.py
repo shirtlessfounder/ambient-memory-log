@@ -94,7 +94,7 @@ def test_resolve_track_identities_assigns_teammate_when_threshold_and_margin_cle
     )
 
 
-def test_resolve_track_identities_marks_low_speech_track_unknown_even_with_strong_match() -> None:
+def test_resolve_track_identities_skips_pyannote_for_low_speech_track() -> None:
     room_track_identity = _import_room_track_identity_module()
     bundle = RoomTrackBundle(raw_track_label="B", audio_bytes=b"track-b", speech_seconds=4.0)
     pyannote_client = FakePyannoteClient(
@@ -115,16 +115,16 @@ def test_resolve_track_identities_marks_low_speech_track_unknown_even_with_stron
         voiceprints=VOICEPRINTS,
     )
 
-    assert len(pyannote_client.calls) == 1
+    assert pyannote_client.calls == []
     assert resolved == (
         room_track_identity.ResolvedTrackIdentity(
             raw_track_label="B",
             resolved_identity="unknown",
             identity_method="speech-too-short",
-            top_match_label="Dylan",
-            top_match_confidence=0.97,
-            second_match_label="Alex",
-            second_match_confidence=0.12,
+            top_match_label=None,
+            top_match_confidence=None,
+            second_match_label=None,
+            second_match_confidence=None,
         ),
     )
 
