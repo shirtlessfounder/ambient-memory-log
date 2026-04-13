@@ -358,6 +358,8 @@ def _persist_window_enrichments(
             identity_resolution_notes.get(provenance_slice.raw_track_label),
             transcript_resolution_notes,
         )
+        if canonical_row.raw_speaker_name is None:
+            canonical_row.raw_speaker_name = provenance_slice.raw_track_label
         canonical_row.speaker_name = track_identity.resolved_identity
         canonical_row.speaker_confidence = track_identity.top_match_confidence
         session.add(

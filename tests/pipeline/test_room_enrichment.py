@@ -794,6 +794,98 @@ def test_room_enrichment_preserves_original_raw_label_when_new_resolver_version_
     assert [row.resolved_speaker_name for row in enrichment_rows] == ["Dylan", "Niyant"]
 
 
+def test_room_enrichment_backfills_missing_raw_label_from_room_provenance(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    room_enrichment = _import_room_enrichment_module()
+    start = datetime(2026, 4, 10, 13, 15, tzinfo=UTC)
+    _seed_canonical_utterances(
+        session_factory,
+        utterances=[
+            {
+                "id": "utt-1",
+                "text": "ready to go",
+                "speaker_name": None,
+                "speaker_confidence": None,
+                "started_at": start,
+                "ended_at": start + timedelta(seconds=3),
+            }
+        ],
+    )
+
+    monkeypatch.setattr(
+        room_enrichment,
+        "load_room_provenance_slices",
+        lambda *args, **kwargs: (FakeProvenanceSlice(canonical_utterance_id="utt-1", raw_track_label="A"),),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        room_enrichment,
+        "build_room_window_audio",
+        lambda *args, **kwargs: FakeRoomWindowAudio(
+            audio_bytes=b"window-audio",
+            track_bundles=(FakeTrackBundle(raw_track_label="A", audio_bytes=b"track-a", speech_seconds=12.0),),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        room_enrichment,
+        "resolve_track_identities",
+        lambda *args, **kwargs: (
+            FakeResolvedTrackIdentity(
+                raw_track_label="A",
+                resolved_identity="Dylan",
+                identity_method="pyannote-teammate",
+                top_match_label="Dylan",
+                top_match_confidence=0.99,
+                second_match_label="Alex",
+                second_match_confidence=0.31,
+            ),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        room_enrichment,
+        "align_retranscribed_segments",
+        lambda *args, **kwargs: [
+            FakeAlignedTranscriptRow(
+                canonical_utterance_id="utt-1",
+                text="Ready to go.",
+                confidence=0.91,
+                used_raw_fallback=False,
+            )
+        ],
+        raising=False,
+    )
+
+    room_enrichment.run_room_enrichment(
+        session_factory=session_factory,
+        source_id="room-1",
+        hours=4,
+        resolver_version="room-v2-audio-identity-v1",
+        dry_run=False,
+        settings=_room_v2_settings(),
+        now=lambda: datetime(2026, 4, 10, 15, 0, tzinfo=UTC),
+        s3_client=object(),
+        pyannote_client=object(),
+        retranscription_client=FakeRetranscriptionClient(segments=("segment",)),
+        voiceprints=(VoiceprintReference(label="Dylan", voiceprint="vp-dylan"),),
+    )
+
+    session = session_factory()
+    try:
+        canonical_row = session.get(CanonicalUtterance, "utt-1")
+    finally:
+        session.close()
+
+    assert canonical_row is not None
+    assert canonical_row.raw_speaker_name == "A"
+    assert canonical_row.raw_speaker_confidence is None
+    assert canonical_row.speaker_name == "Dylan"
+    assert canonical_row.speaker_confidence == pytest.approx(0.99)
+
+
 def test_room_enrichment_falls_back_to_raw_track_labels_when_pyannote_identity_fails(
     session_factory: sessionmaker[Session],
     monkeypatch: pytest.MonkeyPatch,
