@@ -134,6 +134,8 @@ def persist_canonical_utterances(
             ended_at=utterance.ended_at,
             speaker_name=utterance.speaker_name,
             speaker_confidence=utterance.speaker_confidence,
+            raw_speaker_name=utterance.speaker_name,
+            raw_speaker_confidence=utterance.speaker_confidence,
             canonical_source_id=utterance.canonical_source_id,
             processing_version=processing_version,
         )

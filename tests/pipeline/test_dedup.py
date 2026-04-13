@@ -165,6 +165,8 @@ def test_persist_canonical_utterances_prefers_stronger_local_source_candidate(se
     assert stored[0].text == "Hello there."
     assert stored[0].speaker_name == "Dylan"
     assert stored[0].speaker_confidence == pytest.approx(0.92)
+    assert stored[0].raw_speaker_name == "Dylan"
+    assert stored[0].raw_speaker_confidence == pytest.approx(0.92)
     assert len(provenance) == 2
     assert {row.transcript_candidate_id for row in provenance} == {"candidate-local", "candidate-room"}
     assert sum(row.is_canonical for row in provenance) == 1

@@ -92,6 +92,8 @@ class CanonicalUtterance(Base):
     ended_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     speaker_name: Mapped[str | None] = mapped_column(String(100))
     speaker_confidence: Mapped[float | None] = mapped_column(Float)
+    raw_speaker_name: Mapped[str | None] = mapped_column(String(100))
+    raw_speaker_confidence: Mapped[float | None] = mapped_column(Float)
     canonical_source_id: Mapped[str | None] = mapped_column(ForeignKey("aa_sources.id"))
     processing_version: Mapped[str] = mapped_column(String(50), default="v1", nullable=False)
     search_vector: Mapped[str | None] = mapped_column(TSVECTOR)

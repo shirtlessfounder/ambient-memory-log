@@ -47,6 +47,21 @@ class RoomEnrichmentUtterance:
 
 
 @dataclass(frozen=True, slots=True)
+class RoomEnrichmentSpeakerResolution:
+    canonical_utterance_id: str
+    resolved_speaker_name: str
+    resolved_speaker_confidence: float | None
+    resolution_notes: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class RoomEnrichmentTextCleanup:
+    canonical_utterance_id: str
+    cleaned_text: str
+    cleaned_text_confidence: float | None
+
+
+@dataclass(frozen=True, slots=True)
 class RoomEnrichmentWindow:
     started_at: datetime
     ended_at: datetime
@@ -277,6 +292,10 @@ def _persist_window_enrichments(
     teammate_threshold: float,
     top_vs_second_margin: float,
 ) -> int:
+    canonical_by_id = _load_canonical_rows(
+        session,
+        utterance_ids=[utterance.canonical_utterance_id for utterance in window.utterances],
+    )
     provenance_slices = tuple(
         load_room_provenance_slices(
             session,
@@ -329,6 +348,7 @@ def _persist_window_enrichments(
         ordered_aligned_rows,
         strict=True,
     ):
+        canonical_row = canonical_by_id[provenance_slice.canonical_utterance_id]
         track_identity = track_identity_by_label[provenance_slice.raw_track_label]
         transcript_method, transcript_resolution_notes = _transcript_audit(
             aligned_row=aligned_row,
@@ -338,6 +358,8 @@ def _persist_window_enrichments(
             identity_resolution_notes.get(provenance_slice.raw_track_label),
             transcript_resolution_notes,
         )
+        canonical_row.speaker_name = track_identity.resolved_identity
+        canonical_row.speaker_confidence = track_identity.top_match_confidence
         session.add(
             CanonicalUtteranceEnrichment(
                 canonical_utterance_id=provenance_slice.canonical_utterance_id,
@@ -361,6 +383,26 @@ def _persist_window_enrichments(
         )
     session.flush()
     return len(window.utterances)
+
+
+def _load_canonical_rows(
+    session: Session,
+    *,
+    utterance_ids: Sequence[str],
+) -> dict[str, CanonicalUtterance]:
+    rows = session.scalars(
+        select(CanonicalUtterance).where(CanonicalUtterance.id.in_(tuple(utterance_ids)))
+    ).all()
+    rows_by_id = {
+        row.id: row
+        for row in rows
+    }
+    missing_ids = [utterance_id for utterance_id in utterance_ids if utterance_id not in rows_by_id]
+    if missing_ids:
+        raise RoomEnrichmentError(
+            f"missing canonical utterance rows for room enrichment: {', '.join(sorted(missing_ids))}"
+        )
+    return rows_by_id
 
 
 def _resolve_window_track_identities(

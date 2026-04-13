@@ -22,6 +22,15 @@ def test_canonical_utterances_has_search_index():
     assert "search_vector" in table.c
 
 
+def test_canonical_utterances_preserve_raw_speaker_columns():
+    table = Base.metadata.tables["aa_canonical_utterances"]
+
+    assert {
+        "raw_speaker_name",
+        "raw_speaker_confidence",
+    } <= set(table.c.keys())
+
+
 def test_canonical_utterance_enrichments_has_required_columns_and_uniqueness():
     table = Base.metadata.tables["aa_canonical_utterance_enrichments"]
 
